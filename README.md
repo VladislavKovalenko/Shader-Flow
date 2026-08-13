@@ -1,4 +1,5 @@
 # Shader Flow — Figma Plugin
+[Русская версия мануала](READMERU.md)
 
 A plugin for creating and applying GLSL shaders directly in Figma. Generate textures from scratch, process images with a chain of effects, paint masks, and export the result back to the canvas.
 
