@@ -59,7 +59,7 @@
 
 ## 1. Вкладка Shader — Редактор и Превью
 
-![Shader Tab](docs/screenshots/tab-shader.png)
+<img width="800" height="580" alt="Shader" src="https://github.com/user-attachments/assets/8b28cd98-a04f-4be1-84f1-1b68ea42d202" />
 
 > Основная рабочая область. Здесь вы пишете код, настраиваете параметры и видите результат в реальном времени.
 
@@ -115,7 +115,7 @@
 
 ## 2. Вкладка Library — Библиотека шейдеров
 
-![Library Tab](docs/screenshots/tab-library.png)
+<img width="800" height="580" alt="Library" src="https://github.com/user-attachments/assets/4372329c-342b-46ca-8909-91d916500754" />
 
 > Хранилище готовых шейдеров. Быстрая загрузка пресетов в редактор.
 
@@ -147,7 +147,7 @@
 
 ## 3. Вкладка Settings — Настройки и экспорт
 
-![Settings Tab](docs/screenshots/tab-settings.png)
+<img width="800" height="580" alt="Settings" src="https://github.com/user-attachments/assets/50b401a5-77ad-41a5-9b15-4b06a8227c81" />
 
 > Тонкая настройка рендера, интерфейса и работы с файлами.
 
@@ -173,7 +173,7 @@
 
 ## 4. Маски — Mask Stack Editor
 
-![Mask Editor](docs/screenshots/mask-editor.png)
+<img width="800" height="580" alt="Mask" src="https://github.com/user-attachments/assets/d2ba9a83-4b82-412c-a6a0-37807813c70d" />
 
 > Маски определяют, в какой области слоя будет виден эффект. Это мощный инструмент для локального применения шейдеров — например, размыть только угол или добавить свечение только в центре.
 
