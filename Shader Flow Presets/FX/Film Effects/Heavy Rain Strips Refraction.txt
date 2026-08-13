@@ -1,0 +1,170 @@
+precision mediump float;
+
+// Встроенные uniforms плагина
+uniform vec2      iResolution;
+uniform float     iTime;
+uniform sampler2D uTexture;
+uniform int       uHasTexture;
+
+// Настройки (все входные значения ожидаются в диапазоне 0.0 .. 1.0)
+uniform vec4  uBaseColor;           // Цвет дождя
+uniform float uRainSpeed;           // Скорость (0.0 .. 1.0)
+uniform float uWindAngle;           // Угол ветра (0.0 .. 1.0)
+uniform float uInvertDirection;     // Инверсия (> 0.5 — снизу вверх)
+
+uniform float uStreakLength;        // Длина полос (0.0 .. 1.0)
+uniform float uStreakWidth;         // Толщина (0.0 .. 1.0)
+uniform float uRainDensity;         // Интенсивность / Количество (0.0 .. 1.0)
+uniform float uGridChaos;           // Хаос сетки (0.0 .. 1.0)
+uniform float uMicroParticleScale;  // Масштаб микро-капель (0.0 .. 1.0)
+
+uniform float uFadeRandomness;      // Разброс яркости (0.0 .. 1.0)
+uniform float uFadeScale;           // Масштаб волны ветра (0.0 .. 1.0)
+uniform float uMistDensity;         // Плотность тумана (0.0 .. 1.0)
+
+// ═══════════════════════════════════════════════════════════
+// НОВЫЕ ПАРАМЕТРЫ РЕФРАКЦИИ И ПРОЗРАЧНОСТИ
+// ═══════════════════════════════════════════════════════════
+uniform float uDropDistortion;      // Сила преломления/рефракция фона (0.0 .. 1.0)
+uniform float uDropOpacity;         // Прозрачность/непрозрачность самих полос (0.0 .. 1.0)
+
+#define S(a, b, t) smoothstep(a, b, t)
+
+float Hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float Hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float SmoothNoise(vec2 uv) {
+    vec2 i = floor(uv);
+    vec2 f = fract(uv);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    float a = Hash12(i + vec2(0.0, 0.0));
+    float b = Hash12(i + vec2(1.0, 0.0));
+    float c = Hash12(i + vec2(0.0, 1.0));
+    float d = Hash12(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+vec2 RotateUV(vec2 uv, float angleDeg) {
+    float rad = angleDeg * (3.14159265 / 180.0);
+    float s = sin(rad);
+    float c = cos(rad);
+    return vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+}
+
+// Возвращает vec3: xy = вектор сдвига рефракции, z = форма/яркость капли
+vec3 MicroRainLayer(vec2 uv, float scale, float time, float speedFactor, float dirMult, float layerSeed, float streakWidth, float streakLength, float chaos, float fadeRandomness, float fadeScale) {
+    float widthFactor = max(streakWidth, 0.05);
+    float lengthFactor = max(streakLength, 0.05);
+    
+    vec2 st = uv * vec2(scale * 12.0 / widthFactor, scale * 3.0 / lengthFactor);
+    st.y += time * speedFactor * dirMult;
+
+    if (chaos > 0.001) {
+        float noiseShift = SmoothNoise(st * 0.15 + vec2(layerSeed, time * 0.2));
+        st.x += (noiseShift - 0.5) * chaos * 2.0;
+        st.y += (Hash12(floor(st.xx + layerSeed)) - 0.5) * chaos * 1.0;
+    }
+
+    vec2 id = floor(st);
+    vec2 f  = fract(st);
+
+    float cellHash = Hash12(id + layerSeed * 100.0);
+    
+    // Позиционирование и форма
+    float xOffset = cellHash * 0.6 + 0.2;
+    vec2 delta = vec2(f.x - xOffset, f.y - 0.5);
+    
+    float xPos = S(0.12, 0.0, abs(delta.x));
+    float yPos = S(1.0, 0.1, f.y) * S(0.0, 0.2, f.y);
+
+    float dropShape = xPos * yPos * step(0.15, cellHash);
+
+    // Расчет вектора рефракции (искажение UV вдоль формы полосы)
+    vec2 distortionVector = vec2(delta.x * 2.0, delta.y * dirMult) * dropShape;
+
+    // Вариативность яркости
+    float dropBrightness = mix(1.0, Hash21(id * 0.33), fadeRandomness);
+    float groupWave = SmoothNoise(uv * fadeScale + vec2(time * 0.5, layerSeed));
+    dropBrightness *= mix(0.4, 1.2, groupWave);
+
+    return vec3(distortionVector, dropShape * dropBrightness);
+}
+
+float FineRainMist(vec2 uv, float time, float dirMult, float mistDensity) {
+    if (mistDensity <= 0.001) return 0.0;
+
+    vec2 mistUV = uv * 30.0;
+    mistUV.y += time * 3.0 * dirMult;
+    mistUV.x += sin(mistUV.y * 0.3 + time) * 0.3;
+
+    float n = SmoothNoise(mistUV);
+    n += SmoothNoise(mistUV * 2.3 + vec2(time, -time)) * 0.5;
+    
+    return S(0.2, 0.7, n / 1.5) * mistDensity;
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+
+    // Ремаппинг значений
+    float speed         = mix(0.5, 6.0, clamp(uRainSpeed, 0.0, 1.0));
+    float angleDeg      = mix(-40.0, 40.0, clamp(uWindAngle, 0.0, 1.0));
+    float streakLength  = mix(0.1, 3.0, clamp(uStreakLength, 0.0, 1.0));
+    float streakWidth   = mix(0.1, 1.5, clamp(uStreakWidth, 0.0, 1.0));
+    float intensity     = mix(0.5, 5.0, clamp(uRainDensity, 0.0, 1.0));
+
+    float chaos         = clamp(uGridChaos, 0.0, 1.0);
+    float baseScale     = mix(0.5, 4.0, clamp(uMicroParticleScale, 0.0, 1.0));
+
+    float fadeRand      = clamp(uFadeRandomness, 0.0, 1.0);
+    float fadeScale     = mix(2.0, 12.0, clamp(uFadeScale, 0.0, 1.0));
+
+    float mistDensity   = clamp(uMistDensity, 0.0, 1.0) * 0.3;
+    float dirMult       = (uInvertDirection > 0.5) ? 1.0 : -1.0;
+    float time          = iTime * speed;
+
+    // Параметры рефракции и прозрачности
+    float distortion    = mix(0.0, 0.15, clamp(uDropDistortion, 0.0, 1.0));
+    float dropOpacity   = clamp(uDropOpacity, 0.0, 1.0);
+
+    vec2 rotatedUV = RotateUV(uv, angleDeg);
+
+    // Сборка слоев (наклон вектора искажения обратно на угол ветра)
+    vec3 layer1 = MicroRainLayer(rotatedUV, baseScale * 1.5, time, 1.4, dirMult, 1.1, streakWidth, streakLength, chaos, fadeRand, fadeScale);
+    vec3 layer2 = MicroRainLayer(rotatedUV, baseScale * 1.0, time, 1.0, dirMult, 2.3, streakWidth, streakLength, chaos, fadeRand, fadeScale);
+    vec3 layer3 = MicroRainLayer(rotatedUV, baseScale * 0.6, time, 0.7, dirMult, 4.9, streakWidth, streakLength, chaos, fadeRand, fadeScale);
+
+    // Суммарный вектор сдвига UV и маска капель
+    vec2 dropsDistortionOffset = RotateUV(layer1.xy * 0.3 + layer2.xy * 0.5 + layer3.xy * 0.8, -angleDeg);
+    float rainAcc = (layer1.z * 0.3 + layer2.z * 0.5 + layer3.z * 0.8) * intensity;
+
+    float mist = FineRainMist(uv, time, dirMult, mistDensity);
+
+    // Цвет капель и альфа
+    float baseAlpha = uBaseColor.a < 0.01 ? 0.8 : uBaseColor.a;
+    vec3 rainColor  = length(uBaseColor.rgb) < 0.01 ? vec3(0.85, 0.92, 1.0) : uBaseColor.rgb;
+
+    if (uHasTexture == 1) {
+        // Искажаем UV-координаты заднего фона на величину рефракции
+        vec2 offsetUV = clamp(uv - dropsDistortionOffset * distortion, 0.0, 1.0);
+        vec4 texColor = texture2D(uTexture, offsetUV);
+        
+        // Накладываем блик/свет капли с учетом регулятора прозрачности uDropOpacity
+        float highlight = clamp(rainAcc * dropOpacity * baseAlpha, 0.0, 1.0);
+        vec3 finalColor = texColor.rgb + (rainColor * highlight * 1.2) + vec3(mist * 0.1);
+        
+        gl_FragColor = vec4(finalColor, texColor.a);
+    } else {
+        float finalMask = clamp((rainAcc * dropOpacity + mist) * baseAlpha, 0.0, 1.0);
+        gl_FragColor = vec4(rainColor * finalMask, finalMask);
+    }
+}

@@ -1,0 +1,66 @@
+
+
+    // ── Ink bleed ────────────────────────────────────────────
+    float bx = random(gl_FragCoord.xy * 0.5 + vec2(iTime * 0.1, 0.0));
+    float by = random(gl_FragCoord.xy * 0.5 + vec2(0.0, iTime * 0.1));
+    vec2  bleed = (vec2(bx, by) - 0.5) * 0.012 * uInkBleed;
+
+    vec4 pixel = texture2D(uTexture, clamp(uv + bleed, 0.0, 1.0));
+    vec3 col   = pixel.rgb;
+
+    // ── Luminance + контраст ─────────────────────────────────
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    lum = clamp(pow(max(lum, 0.001), uContrast), 0.0, 1.0);
+
+    // ── Dither: смесь Bayer и halftone ───────────────────────
+    float bayerVal    = bayer4(gl_FragCoord.xy);
+    float halftoneVal = halftone(uv, lum, 180.0);
+
+    // uDither: 0.0 = Bayer, 1.0 = halftone
+    float ditherThresh = mix(bayerVal, 0.5, uDither);
+    float masked = step(ditherThresh, lum);
+    // Для halftone режима используем halftoneVal напрямую
+    float finalMask = mix(masked, halftoneVal, uDither);
+
+    // ── Постеризация (4 уровня) ──────────────────────────────
+    float bands = floor(lum * 4.0) / 3.0;
+    // Смешиваем dither и bands
+    float tone = mix(bands, finalMask, 0.6);
+
+    // ── Цвета палитры ────────────────────────────────────────
+    vec3 dark  = paletteDark(uPreset);
+    vec3 light = paletteLight(uPreset);
+    vec3 paper = palettePaper(uPreset);
+
+    vec3 color = mix(dark, light, tone);
+
+    // ── Шум бумаги ───────────────────────────────────────────
+    float pn  = random(gl_FragCoord.xy * 0.13);
+    pn       += random(gl_FragCoord.xy * 0.37) * 0.5;
+    pn       += random(gl_FragCoord.xy * 0.93) * 0.25;
+    pn       /= 1.75;
+    color    += (pn - 0.5) * 0.06 * uPaperAmount;
+
+    // ── Царапины ─────────────────────────────────────────────
+    float scr = random(vec2(
+        floor(gl_FragCoord.x * 0.025),
+        floor(gl_FragCoord.y * 0.55)
+    ));
+    scr   = step(0.984, scr);
+    color = mix(color, paper, scr * uScratchAmount * 0.6);
+
+    // ── Виньетка ─────────────────────────────────────────────
+    vec2  ctr = uv - 0.5;
+    float vig = 1.0 - dot(ctr, ctr) * uVignette;
+    vig = clamp(vig, 0.0, 1.0);
+    color *= vig;
+
+    // ── Выеденные края ───────────────────────────────────────
+    vec2  edge   = abs(uv - 0.5) * 2.0;
+    float border = max(edge.x, edge.y);
+    float worn   = smoothstep(0.85, 1.0,
+        border + random(uv * 120.0) * 0.06);
+    color = mix(color, paper, worn * uBorderWear);
+
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), pixel.a);
+}

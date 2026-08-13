@@ -1,0 +1,109 @@
+precision mediump float;
+
+uniform vec2      iResolution;
+uniform sampler2D uTexture;
+uniform int       uHasTexture;
+uniform float     uPreset;
+
+// ─── Выбор одного из 5 значений по индексу ──────────────────
+// Накопленные step — единственный надёжный способ в GLSL ES 1.0
+float pick5(float p, float v0, float v1, float v2, float v3, float v4) {
+    float r = v0;
+    r += (v1 - v0) * step(0.5, p);
+    r += (v2 - v1) * step(1.5, p);
+    r += (v3 - v2) * step(2.5, p);
+    r += (v4 - v3) * step(3.5, p);
+    return r;
+}
+
+//  0 = Vermis Green   бумага кости + тёмно-зелёная печать
+//  1 = Occult Orange  оранжевый фон + зелёная печать
+//  2 = Crimson Black  чёрный фон + красная печать
+//  3 = Sepia Book     сепия
+//  4 = Mono           классическая монохромная
+
+vec3 paletteDark(float p) {
+    return vec3(
+        pick5(p, 0.12, 0.17, 0.00, 0.25, 0.05),
+        pick5(p, 0.20, 0.22, 0.00, 0.15, 0.05),
+        pick5(p, 0.17, 0.06, 0.00, 0.05, 0.05)
+    );
+}
+
+vec3 paletteLight(float p) {
+    return vec3(
+        pick5(p, 0.75, 0.95, 0.90, 0.80, 0.90),
+        pick5(p, 0.88, 0.65, 0.10, 0.70, 0.90),
+        pick5(p, 0.85, 0.25, 0.10, 0.50, 0.90)
+    );
+}
+
+// ─── Bayer 4×4 (оригинал из рабочей версии) ─────────────────
+float bayer4(vec2 p) {
+    int x     = int(mod(p.x, 4.0));
+    int y     = int(mod(p.y, 4.0));
+    int index = x + y * 4;
+
+    if (index == 0)  return 0.0  / 16.0;
+    if (index == 1)  return 8.0  / 16.0;
+    if (index == 2)  return 2.0  / 16.0;
+    if (index == 3)  return 10.0 / 16.0;
+    if (index == 4)  return 12.0 / 16.0;
+    if (index == 5)  return 4.0  / 16.0;
+    if (index == 6)  return 14.0 / 16.0;
+    if (index == 7)  return 6.0  / 16.0;
+    if (index == 8)  return 3.0  / 16.0;
+    if (index == 9)  return 11.0 / 16.0;
+    if (index == 10) return 1.0  / 16.0;
+    if (index == 11) return 9.0  / 16.0;
+    if (index == 12) return 15.0 / 16.0;
+    if (index == 13) return 7.0  / 16.0;
+    if (index == 14) return 13.0 / 16.0;
+    return 5.0 / 16.0;
+}
+
+// ─── Случайное число ─────────────────────────────────────────
+float random(vec2 st) {
+    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+
+    if (uHasTexture == 0) {
+        // Показываем градиент палитры чтобы видеть что выбрано
+        vec3 d = paletteDark(uPreset);
+        vec3 l = paletteLight(uPreset);
+        gl_FragColor = vec4(mix(d, l, uv.x), 1.0);
+        return;
+    }
+
+    vec3 col = texture2D(uTexture, uv).rgb;
+
+    // ── Luminance ────────────────────────────────────────────
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    lum = pow(lum, 0.8);
+
+    // ── Bayer dither (оригинал) ──────────────────────────────
+    float threshold = bayer4(gl_FragCoord.xy) * 0.25 - 0.125;
+    lum = clamp(lum + threshold, 0.0, 1.0);
+
+    // ── Постеризация (оригинал) ──────────────────────────────
+    float bands = floor(lum * 4.0) / 3.0;
+
+    // ── Палитра ──────────────────────────────────────────────
+    vec3 dark  = paletteDark(uPreset);
+    vec3 light = paletteLight(uPreset);
+    vec3 color = mix(dark, light, bands);
+
+    // ── Шум бумаги (оригинал) ────────────────────────────────
+    float paperNoise = random(gl_FragCoord.xy * 0.5);
+    color += (paperNoise - 0.5) * 0.08;
+
+    // ── Виньетка (оригинал) ──────────────────────────────────
+    vec2  center  = uv - 0.5;
+    float vignette = 1.0 - dot(center, center) * 1.2;
+    color *= vignette;
+
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+}

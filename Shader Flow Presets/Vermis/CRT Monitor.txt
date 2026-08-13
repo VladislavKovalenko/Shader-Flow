@@ -1,0 +1,42 @@
+precision mediump float;
+
+// Ваши стандартные юниформы
+uniform sampler2D uTexture;
+uniform vec2      iResolution;
+uniform int       uHasTexture;
+
+// Новая юниформа для анимации шума
+uniform float     uTime; 
+
+// Генератор псевдослучайных чисел для шума
+float rand(vec2 co) {
+    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+  if (uHasTexture == 0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  // Вычисляем UV-координаты точно так же, как в вашем рабочем примере
+  vec2 uv = gl_FragCoord.xy / iResolution.xy;
+
+  // Получаем базовый цвет пикселя
+  vec4 color = texture2D(uTexture, uv);
+  
+  // ── Эффект полос старого ТВ (Scanlines) ───────────────────
+  // Используем uv.y для создания горизонтальных полос
+  float scanline = sin(uv.y * iResolution.y * 0.8) * 0.08;
+  color.rgb -= scanline;
+  
+  // ── Динамический шум (Глитч/Зернистость) ─────────────────
+  // Смешиваем UV со временем, чтобы шум "прыгал" каждый кадр
+  float noise = rand(uv + vec2(uTime * 0.01, uTime * 0.05)) * 0.12;
+  color.rgb += noise;
+  
+  // Ограничиваем цвета в безопасном диапазоне [0.0, 1.0]
+  color.rgb = clamp(color.rgb, 0.0, 1.0);
+  
+  gl_FragColor = vec4(color.rgb, color.a);
+}

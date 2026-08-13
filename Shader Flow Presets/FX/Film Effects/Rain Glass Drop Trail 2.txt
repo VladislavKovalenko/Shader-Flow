@@ -1,0 +1,147 @@
+precision mediump float;
+
+// Встроенные uniforms
+uniform vec2      iResolution;
+uniform float     iTime;
+uniform sampler2D uTexture;
+uniform int       uHasTexture;
+
+// Настраиваемые параметры (0.0 .. 1.0)
+uniform vec4  uBaseColor;          // Оттенок стекла
+uniform float uDropSize;           // Физический радиус капли (0.0..1.0)
+uniform float uDropScale;          // Масштаб пространственной сетки (0.0..1.0)
+uniform float uTrailLength;        // Базовая длина хвоста (0.0..1.0)
+uniform float uTrailLengthRandom;  // Разброс длины хвостов между каплями (0.0..1.0)
+uniform float uRainSpeed;          // Скорость падения (0.0..1.0)
+uniform float uRainDensity;        // Плотность / Количество (0.0..1.0)
+uniform float uDropDistortion;     // Сила преломления (0.0..1.0)
+uniform float uDropOpacity;        // Яркость бликов (0.0..1.0)
+
+#define S(a, b, t) smoothstep(a, b, t)
+
+vec3 N31(float p) {
+    vec3 p3 = fract(vec3(p) * vec3(0.1031, 0.11369, 0.13787));
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract(vec3((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));
+}
+
+float SawTooth(float t) {
+    return cos(t + cos(t)) + sin(2.0 * t) * 0.2 + sin(4.0 * t) * 0.02;
+}
+
+float DeltaSawTooth(float t) {
+    return 0.4 * cos(2.0 * t) + 0.08 * cos(4.0 * t) - (1.0 - sin(t)) * sin(t + cos(t));
+}
+
+vec3 GetDropsWithTail(vec2 uv, float seed, float time, float density, float size, float speed, float trailLen, float trailRandom) {
+    float t = time * speed + seed * 30.0;
+    
+    uv.y += t * 0.05;
+    uv *= vec2(8.0, 1.5) * density; 
+    
+    vec2 id = floor(uv);
+    vec3 n = N31(id.x + (id.y + seed) * 546.3524);
+    vec2 bd = fract(uv) - 0.5;
+    
+    bd.y *= 2.5;
+    bd.x += (n.x - 0.5) * 0.5;
+    bd /= max(size, 0.001); // Size увеличивает/уменьшает только саму каплю
+
+    t += n.z * 6.283185;
+    float slide = SawTooth(t);
+    
+    // 1. Позиция капли
+    vec2 dropPos = bd;
+    dropPos.y += slide * 1.2; 
+    
+    float dropShape = dropPos.x * dropPos.x;
+    dropShape *= DeltaSawTooth(t);
+    dropPos.y += dropShape; 
+    
+    float d = length(dropPos);
+    float mainDrop = S(0.2, 0.08, d);
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. РАСЧЕТ ИСКРИВЛЕННОГО ХВОСТА И РАНДОМИЗАЦИИ ДЛИНЫ
+    // ═══════════════════════════════════════════════════════════
+    // Рандомизация длины: индивидуальный множитель от 0.1 до 1.0 на основе шума n.z
+    float dropSpecificRand = mix(1.0, n.z * 0.9 + 0.1, trailRandom);
+    float effectiveTrailLen = trailLen * dropSpecificRand;
+
+    float yOffset = dropPos.y; 
+
+    // Максимальная длина хвоста для конкретной капли
+    float maxTailDist = 2.0 * effectiveTrailLen;
+    float tailLengthMask = S(maxTailDist, 0.0, yOffset) * S(-0.05, 0.1, yOffset);
+
+    // Искривление хвоста
+    float curve = sin(yOffset * 4.0 + n.y * 6.28) * 0.06 * (yOffset / max(maxTailDist, 0.001));
+    
+    // Сужение хвоста книзу
+    float tailWidthFactor = mix(0.12, 0.01, clamp(yOffset / max(maxTailDist, 0.001), 0.0, 1.0));
+    
+    float xDistToTail = abs(dropPos.x - curve);
+    float tailMask = S(tailWidthFactor * size, 0.0, xDistToTail) * tailLengthMask * step(0.001, effectiveTrailLen);
+
+    // Мелкие капли в хвосте
+    float ts = 2.0;
+    vec2 trailPos = vec2((dropPos.x - curve) * ts, (fract(yOffset * 1.5 - t * 2.0) - 0.5));
+    float td = length(trailPos);
+    float trailMicroDrops = S(0.15, 0.02, td) * tailLengthMask * step(0.001, effectiveTrailLen);
+
+    // Композит вектора преломления и бликов
+    vec2 offset = dropPos * mainDrop;
+    offset += vec2((dropPos.x - curve) * 2.0, 0.2) * tailMask;
+    offset += trailPos * trailMicroDrops * 0.5;
+
+    float highlight = mainDrop + tailMask * 0.7 + trailMicroDrops * 0.8;
+
+    return vec3(offset, highlight);
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+
+    // ═══════════════════════════════════════════════════════════
+    // Разделение масштаба сетки (Scale) и размера геометрии (Size)
+    // ═══════════════════════════════════════════════════════════
+    // uDropScale управляет масштабом пространства (тайлингом)
+    float gridScale  = mix(0.3, 3.0, clamp(uDropScale, 0.0, 1.0));
+    float density    = mix(0.5, 4.5, clamp(uRainDensity, 0.0, 1.0)) * gridScale;
+
+    // uDropSize управляет только радиусом самой капли в ячейке
+    float baseSize   = mix(0.2, 2.2, clamp(uDropSize, 0.0, 1.0));
+
+    float speed        = mix(0.1, 3.5, clamp(uRainSpeed, 0.0, 1.0));
+    float distortion   = mix(0.0, 0.25, clamp(uDropDistortion, 0.0, 1.0));
+    float opacity      = mix(0.0, 3.0, clamp(uDropOpacity, 0.0, 1.0));
+    float trailLen     = mix(0.0, 2.0, clamp(uTrailLength, 0.0, 1.0));
+    float trailRand    = clamp(uTrailLengthRandom, 0.0, 1.0);
+
+    // Слой 1: Основные крупные капли
+    vec3 drops1 = GetDropsWithTail(uv, 1.0, iTime, density, baseSize, speed, trailLen, trailRand);
+    
+    // Слой 2 и 3: Фоновая морось
+    vec3 drops2 = GetDropsWithTail(uv * 1.3, 10.0, iTime, density * 1.2, baseSize * 0.65, speed, trailLen * 0.5, trailRand);
+    vec3 drops3 = GetDropsWithTail(uv * 2.2, 25.0, iTime, density * 1.5, baseSize * 0.35, speed, trailLen * 0.2, trailRand);
+
+    vec2 dropsOffset = drops1.xy + drops2.xy + drops3.xy;
+    float totalHighlight = drops1.z + drops2.z + drops3.z;
+
+    vec2 offsetUv = clamp(uv - dropsOffset * distortion, 0.0, 1.0);
+    vec3 dropHighlights = clamp(vec3(totalHighlight * 2.5), 0.0, 1.0) * opacity;
+
+    vec3 tint = uBaseColor.rgb;
+    if (length(tint) < 0.01) {
+        tint = vec3(1.0);
+    }
+
+    if (uHasTexture == 1) {
+        vec4 texColor = texture2D(uTexture, offsetUv);
+        vec3 finalColor = texColor.rgb * tint + dropHighlights * 0.25;
+        gl_FragColor = vec4(finalColor, texColor.a);
+    } else {
+        vec3 previewBg = vec3(offsetUv, 0.5) * tint;
+        gl_FragColor = vec4(previewBg + dropHighlights * 0.3, 1.0);
+    }
+}

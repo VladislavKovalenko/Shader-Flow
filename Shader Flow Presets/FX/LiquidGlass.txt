@@ -1,0 +1,56 @@
+precision mediump float;
+uniform vec2  iResolution;
+uniform float iTime;
+uniform sampler2D uTexture;
+uniform int   uHasTexture;
+uniform float uAmount; // Сила преломления/искажения (например, 0.05)
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    
+    // 1. Модуль генерации плазменных волн
+    // Копируем координаты для расчета искажения и масштабируем их
+    vec2 p = uv * 8.0; 
+    
+    // Накладываем друг на друга синусоиды под разными углами и сдвигаем по времени
+    // Это создает сложную, нелинейно движущуюся "жидкость"
+    float t = iTime * 1.5;
+    
+    float waveX = sin(p.x + t) + sin(p.y + t) + sin(p.x - p.y + t);
+    float waveY = cos(p.y - t) + cos(p.x + t) + sin(p.x + p.y - t);
+    
+    // Формируем вектор смещения на основе полученных волн
+    vec2 distortion = vec2(waveX, waveY) * uAmount;
+
+    // 2. Модуль применения искажения
+    vec2 distortedUV = uv + distortion;
+    
+    // Ограничиваем координаты, чтобы текстура не "заворачивалась" на краях (Clamp-эффект)
+    distortedUV = clamp(distortedUV, 0.001, 0.999);
+
+    // 3. Модуль вывода и стилизации
+    if (uHasTexture == 1) {
+        // Базовый цвет из искаженных координат
+        vec4 texColor = texture2D(uTexture, distortedUV);
+        
+        // Добавляем эффект "блика/освещения" на гребнях волн
+        // Для этого берем интенсивность искажения и превращаем ее в светлые полосы
+        float highlight = max(0.0, waveX + waveY) * 0.08;
+        
+        gl_FragColor = vec4(texColor.rgb + vec3(highlight), texColor.a);
+    } else {
+        // Процедурный вывод плазмы, если текстуры нет
+        // Смешиваем цвета на основе формы волн
+        vec3 col1 = vec3(0.1, 0.4, 0.8); // Синий
+        vec3 col2 = vec3(0.8, 0.2, 0.6); // Розовый
+        
+        // Плавное смешивание двух цветов по маске из волны
+        float mask = (waveX + waveY + 4.0) / 8.0;
+        vec3 finalColor = mix(col1, col2, clamp(mask, 0.0, 1.0));
+        
+        // Добавляем легкое свечение
+        finalColor += vec3(max(0.0, waveX) * 0.1);
+        
+        gl_FragColor = vec4(finalColor, 1.0);
+    }
+}

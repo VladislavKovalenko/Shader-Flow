@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "Dream",
+  "stages": [
+    {
+      "shaderName": "Dream",
+      "shaderSource": "precision mediump float;\n\nvec3 darkColor  = vec3(0.12, 0.20, 0.17); // темно-зеленый\nvec3 lightColor = vec3(0.75, 0.88, 0.85); // бирюзовый\n\nfloat bayer4(vec2 p)\n{\n    int x = int(mod(p.x, 4.0));\n    int y = int(mod(p.y, 4.0));\n    int index = x + y * 4;\n\n    if (index == 0)  return 0.0  / 16.0;\n    if (index == 1)  return 8.0  / 16.0;\n    if (index == 2)  return 2.0  / 16.0;\n    if (index == 3)  return 10.0 / 16.0;\n    if (index == 4)  return 12.0 / 16.0;\n    if (index == 5)  return 4.0  / 16.0;\n    if (index == 6)  return 14.0 / 16.0;\n    if (index == 7)  return 6.0  / 16.0;\n    if (index == 8)  return 3.0  / 16.0;\n    if (index == 9)  return 11.0 / 16.0;\n    if (index == 10) return 1.0  / 16.0;\n    if (index == 11) return 9.0  / 16.0;\n    if (index == 12) return 15.0 / 16.0;\n    if (index == 13) return 7.0  / 16.0;\n    if (index == 14) return 13.0 / 16.0;\n    return 5.0 / 16.0; // index == 15\n}\n\nfloat random(vec2 st)\n{\n    return fract(\n        sin(dot(st, vec2(12.9898,78.233)))\n        * 43758.5453123\n    );\n}\n\nvoid main()\n{\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    if (uHasTexture == 0)\n    {\n        gl_FragColor = vec4(uv, 0.5, 1.0);\n        return;\n    }\n\n    vec3 col = texture2D(uTexture, uv).rgb;\n\n    float lum =\n        dot(col, vec3(0.299, 0.587, 0.114));\n\n    lum = pow(lum, 0.8);\n\n    float threshold =\n        bayer4(gl_FragCoord.xy) * 0.25 - 0.125;\n\n    lum += threshold;\n\n    lum = clamp(lum, 0.0, 1.0);\n\n    float bands = floor(lum * 4.0) / 3.0;\n\n    vec3 duotone =\n        mix(darkColor, lightColor, bands);\n\n    float paperNoise =\n        random(gl_FragCoord.xy * 0.5);\n\n    duotone +=\n        (paperNoise - 0.5) * 0.08;\n\n    vec2 center = uv - 0.5;\n\n    float vignette =\n        1.0 - dot(center, center) * 1.2;\n\n    duotone *= vignette;\n\n    gl_FragColor =\n        vec4(clamp(duotone, 0.0, 1.0), 1.0);\n}",
+      "uniforms": {}
+    }
+  ]
+}

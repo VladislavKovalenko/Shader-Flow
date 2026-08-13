@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "name": "Dream",
+  "stages": [
+    {
+      "shaderName": "New Shader Layer",
+      "shaderSource": "precision mediump float;\n\n// Встроенные uniforms плагина\nuniform vec2      iResolution;\nuniform float     iTime;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\n\n// Настройки (все входные значения ожидаются в диапазоне 0.0 .. 1.0)\nuniform vec4  uBaseColor;           // Цвет и прозрачность\nuniform float uRainSpeed;           // Скорость (0.0 .. 1.0)\nuniform float uWindAngle;           // Угол ветра (0.0 .. 1.0)\nuniform float uInvertDirection;     // Инверсия (> 0.5 — снизу вверх)\n\nuniform float uStreakLength;        // Длина полос (0.0 .. 1.0)\nuniform float uStreakWidth;         // Толщина (0.0 .. 1.0)\nuniform float uRainDensity;         // Интенсивность / Количество (0.0 .. 1.0)\nuniform float uGridChaos;           // Хаос сетки (0.0 .. 1.0)\nuniform float uMicroParticleScale;  // Плотность микро-капель (0.0 .. 1.0)\n\nuniform float uFadeRandomness;      // Разброс яркости (0.0 .. 1.0)\nuniform float uFadeScale;           // Масштаб волны ветра (0.0 .. 1.0)\nuniform float uMistDensity;         // Плотность тумана (0.0 .. 1.0)\n\n#define S(a, b, t) smoothstep(a, b, t)\n\nfloat Hash12(vec2 p) {\n    vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n    p3 += dot(p3, p3.yzx + 19.19);\n    return fract((p3.x + p3.y) * p3.z);\n}\n\nfloat Hash21(vec2 p) {\n    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);\n}\n\nfloat SmoothNoise(vec2 uv) {\n    vec2 i = floor(uv);\n    vec2 f = fract(uv);\n    vec2 u = f * f * (3.0 - 2.0 * f);\n\n    float a = Hash12(i + vec2(0.0, 0.0));\n    float b = Hash12(i + vec2(1.0, 0.0));\n    float c = Hash12(i + vec2(0.0, 1.0));\n    float d = Hash12(i + vec2(1.0, 1.0));\n\n    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n}\n\nvec2 RotateUV(vec2 uv, float angleDeg) {\n    float rad = angleDeg * (3.14159265 / 180.0);\n    float s = sin(rad);\n    float c = cos(rad);\n    return vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);\n}\n\nfloat MicroRainLayer(vec2 uv, float scale, float time, float speedFactor, float dirMult, float layerSeed, float streakWidth, float streakLength, float chaos, float fadeRandomness, float fadeScale) {\n    // Безопасные размеры полос\n    float widthFactor = max(streakWidth, 0.05);\n    float lengthFactor = max(streakLength, 0.05);\n    \n    vec2 st = uv * vec2(scale * 12.0 / widthFactor, scale * 3.0 / lengthFactor);\n    \n    st.y += time * speedFactor * dirMult;\n\n    if (chaos > 0.001) {\n        float noiseShift = SmoothNoise(st * 0.15 + vec2(layerSeed, time * 0.2));\n        st.x += (noiseShift - 0.5) * chaos * 2.0;\n        st.y += (Hash12(floor(st.xx + layerSeed)) - 0.5) * chaos * 1.0;\n    }\n\n    vec2 id = floor(st);\n    vec2 f  = fract(st);\n\n    float cellHash = Hash12(id + layerSeed * 100.0);\n    \n    // Форма капли по X и Y\n    float xOffset = cellHash * 0.6 + 0.2;\n    float xPos = S(0.12, 0.0, abs(f.x - xOffset));\n    float yPos = S(1.0, 0.1, f.y) * S(0.0, 0.2, f.y);\n\n    float dropShape = xPos * yPos * step(0.15, cellHash);\n\n    // Яркость и пространственные волны\n    float dropBrightness = mix(1.0, Hash21(id * 0.33), fadeRandomness);\n    float groupWave = SmoothNoise(uv * fadeScale + vec2(time * 0.5, layerSeed));\n    dropBrightness *= mix(0.4, 1.2, groupWave);\n\n    return dropShape * dropBrightness;\n}\n\nfloat FineRainMist(vec2 uv, float time, float dirMult, float mistDensity) {\n    if (mistDensity <= 0.001) return 0.0;\n\n    vec2 mistUV = uv * 30.0;\n    mistUV.y += time * 3.0 * dirMult;\n    mistUV.x += sin(mistUV.y * 0.3 + time) * 0.3;\n\n    float n = SmoothNoise(mistUV);\n    n += SmoothNoise(mistUV * 2.3 + vec2(time, -time)) * 0.5;\n    \n    return S(0.2, 0.7, n / 1.5) * mistDensity;\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // Ремаппинг значений с дефолтами (на случай, если слайдеры плагина стоят в 0)\n    float speed         = mix(0.5, 6.0, clamp(uRainSpeed, 0.0, 1.0));\n    float angleDeg      = mix(-40.0, 40.0, clamp(uWindAngle, 0.0, 1.0));\n    float streakLength  = mix(0.1, 3.0, clamp(uStreakLength, 0.0, 1.0));\n    float streakWidth   = mix(0.1, 1.5, clamp(uStreakWidth, 0.0, 1.0));\n    float intensity     = mix(0.5, 5.0, clamp(uRainDensity, 0.0, 1.0));\n\n    float chaos         = clamp(uGridChaos, 0.0, 1.0);\n    float baseScale     = mix(0.5, 4.0, clamp(uMicroParticleScale, 0.0, 1.0));\n\n    float fadeRand      = clamp(uFadeRandomness, 0.0, 1.0);\n    float fadeScale     = mix(2.0, 12.0, clamp(uFadeScale, 0.0, 1.0));\n\n    float mistDensity   = clamp(uMistDensity, 0.0, 1.0) * 0.3;\n    float dirMult       = (uInvertDirection > 0.5) ? 1.0 : -1.0;\n    float time          = iTime * speed;\n\n    vec2 rotatedUV = RotateUV(uv, angleDeg);\n\n    // Сборка слоев\n    float rainAcc = 0.0;\n    rainAcc += MicroRainLayer(rotatedUV, baseScale * 1.5, time, 1.4, dirMult, 1.1, streakWidth, streakLength, chaos, fadeRand, fadeScale) * 0.3;\n    rainAcc += MicroRainLayer(rotatedUV, baseScale * 1.0, time, 1.0, dirMult, 2.3, streakWidth, streakLength, chaos, fadeRand, fadeScale) * 0.5;\n    rainAcc += MicroRainLayer(rotatedUV, baseScale * 0.6, time, 0.7, dirMult, 4.9, streakWidth, streakLength, chaos, fadeRand, fadeScale) * 0.8;\n\n    float mist = FineRainMist(uv, time, dirMult, mistDensity);\n\n    // Проверка альфы uBaseColor (если пришел 0.0, принудительно ставим 0.8)\n    float baseAlpha = uBaseColor.a < 0.01 ? 0.8 : uBaseColor.a;\n    vec3 rainColor  = length(uBaseColor.rgb) < 0.01 ? vec3(0.85, 0.92, 1.0) : uBaseColor.rgb;\n\n    // Итоговое значение капель\n    float dropMask = clamp((rainAcc * intensity + mist) * baseAlpha, 0.0, 1.0);\n\n    if (uHasTexture == 1) {\n        vec4 texColor = texture2D(uTexture, uv);\n        // Аддитивное наложение белых/светлых полос капель поверх вашей картинки\n        vec3 finalColor = texColor.rgb + (rainColor * dropMask * 1.5);\n        gl_FragColor = vec4(finalColor, texColor.a);\n    } else {\n        gl_FragColor = vec4(rainColor * dropMask, dropMask);\n    }\n}",
+      "visible": true,
+      "uniforms": {
+        "uRainSpeed": {
+          "type": "float",
+          "value": 0.713,
+          "min": 0,
+          "max": 1
+        },
+        "uWindAngle": {
+          "type": "float",
+          "value": 0.517,
+          "min": 0,
+          "max": 1
+        },
+        "uInvertDirection": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uStreakLength": {
+          "type": "float",
+          "value": 0.321,
+          "min": 0,
+          "max": 1
+        },
+        "uStreakWidth": {
+          "type": "float",
+          "value": 0.048,
+          "min": 0,
+          "max": 1
+        },
+        "uRainDensity": {
+          "type": "float",
+          "value": 0.065,
+          "min": 0,
+          "max": 1
+        },
+        "uGridChaos": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uMicroParticleScale": {
+          "type": "float",
+          "value": 0.529,
+          "min": 0,
+          "max": 1
+        },
+        "uFadeRandomness": {
+          "type": "float",
+          "value": 0.434,
+          "min": 0,
+          "max": 1
+        },
+        "uFadeScale": {
+          "type": "float",
+          "value": 0.464,
+          "min": 0,
+          "max": 1
+        },
+        "uMistDensity": {
+          "type": "float",
+          "value": 0.071,
+          "min": 0,
+          "max": 1
+        }
+      },
+      "masks": []
+    },
+    {
+      "shaderName": "Gaussian Blur",
+      "shaderSource": "precision mediump float;\nuniform vec2  iResolution;\nuniform sampler2D uTexture;\nuniform int   uHasTexture;\nuniform float uRadius;\n\nvoid main() {\n  vec2 uv = gl_FragCoord.xy / iResolution.xy;\n  if (uHasTexture == 0) { gl_FragColor = vec4(uv, 0.5, 1.0); return; }\n\n  vec4 color = vec4(0.0);\n  float total = 0.0;\n  float r = uRadius / iResolution.x;\n\n  for(float x = -4.0; x <= 4.0; x += 1.0) {\n    for(float y = -4.0; y <= 4.0; y += 1.0) {\n      float w = exp(-(x*x+y*y)/8.0);\n      color += texture2D(uTexture, uv + vec2(x,y)*r) * w;\n      total += w;\n    }\n  }\n  gl_FragColor = color / total;\n}",
+      "visible": true,
+      "uniforms": {
+        "uRadius": {
+          "type": "float",
+          "value": 0.579,
+          "min": 0,
+          "max": 20
+        }
+      },
+      "masks": []
+    },
+    {
+      "shaderName": "New Shader Layer",
+      "shaderSource": "precision mediump float;\n\n// Встроенные uniforms\nuniform vec2      iResolution;\nuniform float     iTime;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\n\n// Настраиваемые параметры (0.0 .. 1.0)\nuniform vec4  uBaseColor;          // Оттенок стекла\nuniform float uDropSize;           // Физический радиус капли (0.0..1.0)\nuniform float uDropScale;          // Масштаб пространственной сетки (0.0..1.0)\nuniform float uTrailLength;        // Базовая длина хвоста (0.0..1.0)\nuniform float uTrailLengthRandom;  // Разброс длины хвостов между каплями (0.0..1.0)\nuniform float uRainSpeed;          // Скорость падения (0.0..1.0)\nuniform float uRainDensity;        // Плотность / Количество (0.0..1.0)\nuniform float uDropDistortion;     // Сила преломления (0.0..1.0)\nuniform float uDropOpacity;        // Яркость бликов (0.0..1.0)\n\n#define S(a, b, t) smoothstep(a, b, t)\n\nvec3 N31(float p) {\n    vec3 p3 = fract(vec3(p) * vec3(0.1031, 0.11369, 0.13787));\n    p3 += dot(p3, p3.yzx + 19.19);\n    return fract(vec3((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));\n}\n\nfloat SawTooth(float t) {\n    return cos(t + cos(t)) + sin(2.0 * t) * 0.2 + sin(4.0 * t) * 0.02;\n}\n\nfloat DeltaSawTooth(float t) {\n    return 0.4 * cos(2.0 * t) + 0.08 * cos(4.0 * t) - (1.0 - sin(t)) * sin(t + cos(t));\n}\n\nvec3 GetDropsWithTail(vec2 uv, float seed, float time, float density, float size, float speed, float trailLen, float trailRandom) {\n    float t = time * speed + seed * 30.0;\n    \n    uv.y += t * 0.05;\n    uv *= vec2(8.0, 1.5) * density; \n    \n    vec2 id = floor(uv);\n    vec3 n = N31(id.x + (id.y + seed) * 546.3524);\n    vec2 bd = fract(uv) - 0.5;\n    \n    bd.y *= 2.5;\n    bd.x += (n.x - 0.5) * 0.5;\n    bd /= max(size, 0.001); // Size увеличивает/уменьшает только саму каплю\n\n    t += n.z * 6.283185;\n    float slide = SawTooth(t);\n    \n    // 1. Позиция капли\n    vec2 dropPos = bd;\n    dropPos.y += slide * 1.2; \n    \n    float dropShape = dropPos.x * dropPos.x;\n    dropShape *= DeltaSawTooth(t);\n    dropPos.y += dropShape; \n    \n    float d = length(dropPos);\n    float mainDrop = S(0.2, 0.08, d);\n\n    // ═══════════════════════════════════════════════════════════\n    // 2. РАСЧЕТ ИСКРИВЛЕННОГО ХВОСТА И РАНДОМИЗАЦИИ ДЛИНЫ\n    // ═══════════════════════════════════════════════════════════\n    // Рандомизация длины: индивидуальный множитель от 0.1 до 1.0 на основе шума n.z\n    float dropSpecificRand = mix(1.0, n.z * 0.9 + 0.1, trailRandom);\n    float effectiveTrailLen = trailLen * dropSpecificRand;\n\n    float yOffset = dropPos.y; \n\n    // Максимальная длина хвоста для конкретной капли\n    float maxTailDist = 2.0 * effectiveTrailLen;\n    float tailLengthMask = S(maxTailDist, 0.0, yOffset) * S(-0.05, 0.1, yOffset);\n\n    // Искривление хвоста\n    float curve = sin(yOffset * 4.0 + n.y * 6.28) * 0.06 * (yOffset / max(maxTailDist, 0.001));\n    \n    // Сужение хвоста книзу\n    float tailWidthFactor = mix(0.12, 0.01, clamp(yOffset / max(maxTailDist, 0.001), 0.0, 1.0));\n    \n    float xDistToTail = abs(dropPos.x - curve);\n    float tailMask = S(tailWidthFactor * size, 0.0, xDistToTail) * tailLengthMask * step(0.001, effectiveTrailLen);\n\n    // Мелкие капли в хвосте\n    float ts = 2.0;\n    vec2 trailPos = vec2((dropPos.x - curve) * ts, (fract(yOffset * 1.5 - t * 2.0) - 0.5));\n    float td = length(trailPos);\n    float trailMicroDrops = S(0.15, 0.02, td) * tailLengthMask * step(0.001, effectiveTrailLen);\n\n    // Композит вектора преломления и бликов\n    vec2 offset = dropPos * mainDrop;\n    offset += vec2((dropPos.x - curve) * 2.0, 0.2) * tailMask;\n    offset += trailPos * trailMicroDrops * 0.5;\n\n    float highlight = mainDrop + tailMask * 0.7 + trailMicroDrops * 0.8;\n\n    return vec3(offset, highlight);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // ═══════════════════════════════════════════════════════════\n    // Разделение масштаба сетки (Scale) и размера геометрии (Size)\n    // ═══════════════════════════════════════════════════════════\n    // uDropScale управляет масштабом пространства (тайлингом)\n    float gridScale  = mix(0.3, 3.0, clamp(uDropScale, 0.0, 1.0));\n    float density    = mix(0.5, 4.5, clamp(uRainDensity, 0.0, 1.0)) * gridScale;\n\n    // uDropSize управляет только радиусом самой капли в ячейке\n    float baseSize   = mix(0.2, 2.2, clamp(uDropSize, 0.0, 1.0));\n\n    float speed        = mix(0.1, 3.5, clamp(uRainSpeed, 0.0, 1.0));\n    float distortion   = mix(0.0, 0.25, clamp(uDropDistortion, 0.0, 1.0));\n    float opacity      = mix(0.0, 3.0, clamp(uDropOpacity, 0.0, 1.0));\n    float trailLen     = mix(0.0, 2.0, clamp(uTrailLength, 0.0, 1.0));\n    float trailRand    = clamp(uTrailLengthRandom, 0.0, 1.0);\n\n    // Слой 1: Основные крупные капли\n    vec3 drops1 = GetDropsWithTail(uv, 1.0, iTime, density, baseSize, speed, trailLen, trailRand);\n    \n    // Слой 2 и 3: Фоновая морось\n    vec3 drops2 = GetDropsWithTail(uv * 1.3, 10.0, iTime, density * 1.2, baseSize * 0.65, speed, trailLen * 0.5, trailRand);\n    vec3 drops3 = GetDropsWithTail(uv * 2.2, 25.0, iTime, density * 1.5, baseSize * 0.35, speed, trailLen * 0.2, trailRand);\n\n    vec2 dropsOffset = drops1.xy + drops2.xy + drops3.xy;\n    float totalHighlight = drops1.z + drops2.z + drops3.z;\n\n    vec2 offsetUv = clamp(uv - dropsOffset * distortion, 0.0, 1.0);\n    vec3 dropHighlights = clamp(vec3(totalHighlight * 2.5), 0.0, 1.0) * opacity;\n\n    vec3 tint = uBaseColor.rgb;\n    if (length(tint) < 0.01) {\n        tint = vec3(1.0);\n    }\n\n    if (uHasTexture == 1) {\n        vec4 texColor = texture2D(uTexture, offsetUv);\n        vec3 finalColor = texColor.rgb * tint + dropHighlights * 0.25;\n        gl_FragColor = vec4(finalColor, texColor.a);\n    } else {\n        vec3 previewBg = vec3(offsetUv, 0.5) * tint;\n        gl_FragColor = vec4(previewBg + dropHighlights * 0.3, 1.0);\n    }\n}",
+      "visible": true,
+      "uniforms": {
+        "uDropSize": {
+          "type": "float",
+          "value": 0.642,
+          "min": 0,
+          "max": 1
+        },
+        "uDropScale": {
+          "type": "float",
+          "value": 0.749,
+          "min": 0,
+          "max": 1
+        },
+        "uTrailLength": {
+          "type": "float",
+          "value": 0.25,
+          "min": 0,
+          "max": 1
+        },
+        "uTrailLengthRandom": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uRainSpeed": {
+          "type": "float",
+          "value": 0.577,
+          "min": 0,
+          "max": 1
+        },
+        "uRainDensity": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uDropDistortion": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uDropOpacity": {
+          "type": "float",
+          "value": 0,
+          "min": 0,
+          "max": 1
+        }
+      },
+      "masks": []
+    },
+    {
+      "shaderName": "New Shader Layer",
+      "shaderSource": "precision mediump float;\n\n// Встроенные uniforms\nuniform vec2      iResolution;\nuniform float     iTime;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\n\n// Настраиваемые параметры (0.0 .. 1.0)\nuniform vec4  uBaseColor;          // Оттенок стекла\nuniform float uDropSize;           // Физический радиус капли (0.0..1.0)\nuniform float uDropScale;          // Масштаб пространственной сетки (0.0..1.0)\nuniform float uTrailLength;        // Базовая длина хвоста (0.0..1.0)\nuniform float uTrailLengthRandom;  // Разброс длины хвостов между каплями (0.0..1.0)\nuniform float uRainSpeed;          // Скорость падения (0.0..1.0)\nuniform float uRainDensity;        // Плотность / Количество (0.0..1.0)\nuniform float uDropDistortion;     // Сила преломления (0.0..1.0)\nuniform float uDropOpacity;        // Яркость бликов (0.0..1.0)\n\n#define S(a, b, t) smoothstep(a, b, t)\n\nvec3 N31(float p) {\n    vec3 p3 = fract(vec3(p) * vec3(0.1031, 0.11369, 0.13787));\n    p3 += dot(p3, p3.yzx + 19.19);\n    return fract(vec3((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));\n}\n\nfloat SawTooth(float t) {\n    return cos(t + cos(t)) + sin(2.0 * t) * 0.2 + sin(4.0 * t) * 0.02;\n}\n\nfloat DeltaSawTooth(float t) {\n    return 0.4 * cos(2.0 * t) + 0.08 * cos(4.0 * t) - (1.0 - sin(t)) * sin(t + cos(t));\n}\n\nvec3 GetDropsWithTail(vec2 uv, float seed, float time, float density, float size, float speed, float trailLen, float trailRandom) {\n    float t = time * speed + seed * 30.0;\n    \n    uv.y += t * 0.05;\n    uv *= vec2(8.0, 1.5) * density; \n    \n    vec2 id = floor(uv);\n    vec3 n = N31(id.x + (id.y + seed) * 546.3524);\n    vec2 bd = fract(uv) - 0.5;\n    \n    bd.y *= 2.5;\n    bd.x += (n.x - 0.5) * 0.5;\n    bd /= max(size, 0.001); // Size увеличивает/уменьшает только саму каплю\n\n    t += n.z * 6.283185;\n    float slide = SawTooth(t);\n    \n    // 1. Позиция капли\n    vec2 dropPos = bd;\n    dropPos.y += slide * 1.2; \n    \n    float dropShape = dropPos.x * dropPos.x;\n    dropShape *= DeltaSawTooth(t);\n    dropPos.y += dropShape; \n    \n    float d = length(dropPos);\n    float mainDrop = S(0.2, 0.08, d);\n\n    // ═══════════════════════════════════════════════════════════\n    // 2. РАСЧЕТ ИСКРИВЛЕННОГО ХВОСТА И РАНДОМИЗАЦИИ ДЛИНЫ\n    // ═══════════════════════════════════════════════════════════\n    // Рандомизация длины: индивидуальный множитель от 0.1 до 1.0 на основе шума n.z\n    float dropSpecificRand = mix(1.0, n.z * 0.9 + 0.1, trailRandom);\n    float effectiveTrailLen = trailLen * dropSpecificRand;\n\n    float yOffset = dropPos.y; \n\n    // Максимальная длина хвоста для конкретной капли\n    float maxTailDist = 2.0 * effectiveTrailLen;\n    float tailLengthMask = S(maxTailDist, 0.0, yOffset) * S(-0.05, 0.1, yOffset);\n\n    // Искривление хвоста\n    float curve = sin(yOffset * 4.0 + n.y * 6.28) * 0.06 * (yOffset / max(maxTailDist, 0.001));\n    \n    // Сужение хвоста книзу\n    float tailWidthFactor = mix(0.12, 0.01, clamp(yOffset / max(maxTailDist, 0.001), 0.0, 1.0));\n    \n    float xDistToTail = abs(dropPos.x - curve);\n    float tailMask = S(tailWidthFactor * size, 0.0, xDistToTail) * tailLengthMask * step(0.001, effectiveTrailLen);\n\n    // Мелкие капли в хвосте\n    float ts = 2.0;\n    vec2 trailPos = vec2((dropPos.x - curve) * ts, (fract(yOffset * 1.5 - t * 2.0) - 0.5));\n    float td = length(trailPos);\n    float trailMicroDrops = S(0.15, 0.02, td) * tailLengthMask * step(0.001, effectiveTrailLen);\n\n    // Композит вектора преломления и бликов\n    vec2 offset = dropPos * mainDrop;\n    offset += vec2((dropPos.x - curve) * 2.0, 0.2) * tailMask;\n    offset += trailPos * trailMicroDrops * 0.5;\n\n    float highlight = mainDrop + tailMask * 0.7 + trailMicroDrops * 0.8;\n\n    return vec3(offset, highlight);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // ═══════════════════════════════════════════════════════════\n    // Разделение масштаба сетки (Scale) и размера геометрии (Size)\n    // ═══════════════════════════════════════════════════════════\n    // uDropScale управляет масштабом пространства (тайлингом)\n    float gridScale  = mix(0.3, 3.0, clamp(uDropScale, 0.0, 1.0));\n    float density    = mix(0.5, 4.5, clamp(uRainDensity, 0.0, 1.0)) * gridScale;\n\n    // uDropSize управляет только радиусом самой капли в ячейке\n    float baseSize   = mix(0.2, 2.2, clamp(uDropSize, 0.0, 1.0));\n\n    float speed        = mix(0.1, 3.5, clamp(uRainSpeed, 0.0, 1.0));\n    float distortion   = mix(0.0, 0.25, clamp(uDropDistortion, 0.0, 1.0));\n    float opacity      = mix(0.0, 3.0, clamp(uDropOpacity, 0.0, 1.0));\n    float trailLen     = mix(0.0, 2.0, clamp(uTrailLength, 0.0, 1.0));\n    float trailRand    = clamp(uTrailLengthRandom, 0.0, 1.0);\n\n    // Слой 1: Основные крупные капли\n    vec3 drops1 = GetDropsWithTail(uv, 1.0, iTime, density, baseSize, speed, trailLen, trailRand);\n    \n    // Слой 2 и 3: Фоновая морось\n    vec3 drops2 = GetDropsWithTail(uv * 1.3, 10.0, iTime, density * 1.2, baseSize * 0.65, speed, trailLen * 0.5, trailRand);\n    vec3 drops3 = GetDropsWithTail(uv * 2.2, 25.0, iTime, density * 1.5, baseSize * 0.35, speed, trailLen * 0.2, trailRand);\n\n    vec2 dropsOffset = drops1.xy + drops2.xy + drops3.xy;\n    float totalHighlight = drops1.z + drops2.z + drops3.z;\n\n    vec2 offsetUv = clamp(uv - dropsOffset * distortion, 0.0, 1.0);\n    vec3 dropHighlights = clamp(vec3(totalHighlight * 2.5), 0.0, 1.0) * opacity;\n\n    vec3 tint = uBaseColor.rgb;\n    if (length(tint) < 0.01) {\n        tint = vec3(1.0);\n    }\n\n    if (uHasTexture == 1) {\n        vec4 texColor = texture2D(uTexture, offsetUv);\n        vec3 finalColor = texColor.rgb * tint + dropHighlights * 0.25;\n        gl_FragColor = vec4(finalColor, texColor.a);\n    } else {\n        vec3 previewBg = vec3(offsetUv, 0.5) * tint;\n        gl_FragColor = vec4(previewBg + dropHighlights * 0.3, 1.0);\n    }\n}",
+      "visible": true,
+      "uniforms": {
+        "uDropSize": {
+          "type": "float",
+          "value": 0.648,
+          "min": 0,
+          "max": 1
+        },
+        "uDropScale": {
+          "type": "float",
+          "value": 0.797,
+          "min": 0,
+          "max": 1
+        },
+        "uTrailLength": {
+          "type": "float",
+          "value": 0.285,
+          "min": 0,
+          "max": 1
+        },
+        "uTrailLengthRandom": {
+          "type": "float",
+          "value": 0.708,
+          "min": 0,
+          "max": 1
+        },
+        "uRainSpeed": {
+          "type": "float",
+          "value": 0.351,
+          "min": 0,
+          "max": 1
+        },
+        "uRainDensity": {
+          "type": "float",
+          "value": 0.713,
+          "min": 0,
+          "max": 1
+        },
+        "uDropDistortion": {
+          "type": "float",
+          "value": 1,
+          "min": 0,
+          "max": 1
+        },
+        "uDropOpacity": {
+          "type": "float",
+          "value": 0,
+          "min": 0,
+          "max": 1
+        }
+      },
+      "masks": []
+    }
+  ]
+}
