@@ -92,7 +92,7 @@ async function loadImageFromSelection() {
 // ─── Применение результата (Replace / Add) ─────────────────────────────────
 
 async function applyImage(nodeId, base64, method) {
-  var node = figma.getNodeById(nodeId);
+  var node = await figma.getNodeByIdAsync(nodeId);
   if (!node) {
     figma.ui.postMessage({ type: "applyError", message: "Слой не найден" });
     return;
