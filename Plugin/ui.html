@@ -6592,19 +6592,25 @@ uniform int uHasTexture;
         const unifs = s.uniforms ? Object.entries(s.uniforms).map(([name, data]) => {
           const isMeta = data && typeof data === 'object' && !Array.isArray(data) && 'value' in data;
           const raw = isMeta ? data.value : data;
-          const inferred = Array.isArray(raw) ? (raw.length === 2 ? 'vec2' : 'vec3')
-                       : (typeof raw === 'boolean' ? 'bool' : 'float');
+          let inferred = 'float';
+          if (Array.isArray(raw)) {
+            inferred = raw.length === 2 ? 'vec2' : (raw.length === 3 ? 'vec3' : 'vec4');
+          } else if (typeof raw === 'boolean') {
+            inferred = 'bool';
+          } else if (typeof raw === 'number') {
+            inferred = Number.isInteger(raw) ? 'int' : 'float';
+          }
           return {
             name,
-            type: isMeta && data.type ? data.type : inferred,
+            type: isMeta && data.type ? data.type : inferred, // Сохраняем vec3color
             value: Array.isArray(raw) ? [...raw] : raw,
-            min: isMeta ? data.min : undefined,
-            max: isMeta ? data.max : undefined
+            min: isMeta && data.min !== undefined ? data.min : undefined,
+            max: isMeta && data.max !== undefined ? data.max : undefined
           };
         }) : [];
         return {
           id,
-          name: (s.shaderName || 'Effect').replace(/^[\s\S]*?(\w)/, '$1').replace(/^[^\w]+/, '').trim(),
+          name: (s.shaderName || 'Effect').replace(/^[\s\S]*?(\w)/, '$1').replace(/^[^\w]+/, '').trim() || 'Effect',
           code: s.shaderSource || '',
           uniforms: unifs,
           visible: s.visible !== false,
@@ -6614,8 +6620,14 @@ uniform int uHasTexture;
       });
       activeLayerId = layers.length > 0 ? layers[layers.length - 1].id : null;
       renderList();
-      if (activeLayerId) activateLayer(activeLayerId);
-      else { document.getElementById('code-editor').value = ''; S.uniforms = []; UniformsUI.renderAll(); updateLineNumbers(); }
+      if (activeLayerId) {
+        activateLayer(activeLayerId);
+      } else {
+        document.getElementById('code-editor').value = '';
+        S.uniforms = [];
+        UniformsUI.renderAll();
+        updateLineNumbers();
+      }
     }
   };
 })();
@@ -7113,7 +7125,8 @@ const EffectSerializer = {
   serializeCurrentEffect(effectName) {
     const stagesData = [];
     if (ShaderLayers.hasLayers()) {
-      const layers = ShaderLayers.getVisibleLayersData();
+      ShaderLayers.saveActive(); // Сохраняем текущие правки из редактора в активный слой
+      const layers = ShaderLayers.getAll(); // Используем getAll(), чтобы получить свойство `code`
       for (const layer of layers) {
         const u = {};
         for (const unif of (layer.uniforms || [])) {
@@ -7123,6 +7136,7 @@ const EffectSerializer = {
           shaderName: layer.name,
           shaderSource: layer.code || '',
           uniforms: u,
+          visible: layer.visible !== false,
           masks: (layer.masks || []).map(m => MaskModel.serialize(m))
         });
       }
@@ -7134,14 +7148,22 @@ const EffectSerializer = {
           const u = {};
           for (const unif of S.uniforms) u[unif.name] = { type: unif.type, value: unif.value, min: unif.min, max: unif.max };
           return u;
-        })()
+        })(),
+        visible: true,
+        masks: []
       });
     }
     return JSON.stringify({
       version: this.CURRENT_VERSION,
       name: effectName,
       stages: stagesData,
-      masterMask: MasterMaskState.masks.map(m => MaskModel.serialize(m))
+      masterMask: MasterMaskState.masks.map(m => MaskModel.serialize(m)),
+      settings: { // Сохраняем глобальные настройки кнопок
+        resolution: S.resolution,
+        exactPreview: S.exactPreview,
+        animated: S.animated,
+        fps: document.getElementById('frame-rate-select') ? document.getElementById('frame-rate-select').value : '60'
+      }
     }, null, 2);
   },
 
@@ -7151,7 +7173,6 @@ const EffectSerializer = {
       if (!data || data.version === undefined) throw new Error("Invalid format");
       if (!data.stages || data.stages.length === 0) throw new Error("Empty chain");
 
-      // Загружаем цепочку как стек Effect-слоёв (включая маски).
       ShaderLayers.clear();
       ShaderLayers.loadChain(data.stages);
 
@@ -7162,11 +7183,53 @@ const EffectSerializer = {
       }
       updateMasterMaskButton();
 
+      // Восстанавливаем глобальные настройки плагина
+      if (data.settings) {
+        if (data.settings.resolution) {
+          S.resolution = data.settings.resolution;
+          const resSelect = document.getElementById('res-select');
+          if (resSelect) resSelect.value = S.resolution;
+        }
+        if (typeof data.settings.exactPreview === 'boolean') {
+          S.exactPreview = data.settings.exactPreview;
+          const exactInput = document.getElementById('exact-preview-input');
+          if (exactInput) exactInput.checked = S.exactPreview;
+          const canvas = document.getElementById('gl-canvas');
+          if (canvas) canvas.style.imageRendering = S.exactPreview ? 'pixelated' : 'auto';
+        }
+        if (typeof data.settings.animated === 'boolean') {
+          S.animated = data.settings.animated;
+          const playBtn = document.getElementById('btn-play');
+          if (playBtn) {
+            if (S.animated) {
+              S.startTime = performance.now();
+              playBtn.textContent = '⏸';
+              playBtn.classList.add('active');
+            } else {
+              S.timeOffset = GL.getTime();
+              playBtn.textContent = '▶';
+              playBtn.classList.remove('active');
+            }
+          }
+        }
+        if (data.settings.fps) {
+          const frameRateSelect = document.getElementById('frame-rate-select');
+          if (frameRateSelect) {
+            frameRateSelect.value = data.settings.fps;
+            GL.setFrameRate(parseInt(data.settings.fps));
+          }
+        }
+      }
+
+      // Триггерим ресайз, чтобы canvas обновил размеры согласно S.resolution
+      window.dispatchEvent(new Event('resize'));
+
       if (S.activeTab !== 'shader') switchTab('shader');
-      UndoRedo.push();
+      UndoRedo.pushImmediate();
       setStatus('Chain loaded', 'success');
     } catch (e) {
       setStatus('Failed to load effect: ' + e.message, 'error');
+      console.error(e);
     }
   },
 
