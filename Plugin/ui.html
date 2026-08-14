@@ -346,7 +346,7 @@ body {
   flex: 1;
   position: relative;
   overflow: hidden;
-  background: repeating-conic-gradient(#e0e0e0 0% 25%, #f0f0f0 0% 50%) 0 0 / 14px 14px;
+  background: repeating-conic-gradient(#ffffff 0% 25%, #b3b3b3 0% 50%) 0 0 / 16px 16px;
 }
 
 #gl-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -1369,6 +1369,7 @@ body {
   <!-- ── BOTTOM BAR ── -->
   <div id="bottombar">
     <span id="status-label">Select a layer</span>
+    <button class="btn btn-ghost" id="btn-master-mask" data-tip="Global mask applied after all shader layers">Master Mask</button>
     <button class="btn btn-ghost" id="btn-show-code" data-tip="Показать или скрыть редактор кода" title="Show / Hide code">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       Code
@@ -1525,6 +1526,10 @@ const EditorState = {
   }
 };
 
+const MasterMaskState = {
+    masks: []
+};
+
 const S = {
   uniforms: [],
   // 'shader' | 'library' | 'settings'
@@ -1597,7 +1602,8 @@ const GL = (() => {
     gl = canvas.getContext('webgl', {
       preserveDrawingBuffer: true,
       antialias: false,
-      alpha: true
+      alpha: true,
+      premultipliedAlpha: false
     });
     if (!gl) throw new Error('WebGL не поддерживается');
 
@@ -1731,6 +1737,10 @@ uniform int uHasTexture;
       const fb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      // Явная очистка
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
       pingPongTexs[i] = t;
       pingPongFBs[i]  = fb;
     }
@@ -1816,6 +1826,12 @@ uniform int uHasTexture;
     _maskFB = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, _maskFB);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, _maskTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    // Очистка новой текстуры маски
+    gl.bindFramebuffer(gl.FRAMEBUFFER, _maskFB);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     if (_scratchTex) gl.deleteTexture(_scratchTex);
@@ -2204,6 +2220,95 @@ uniform int uHasTexture;
     gl.activeTexture(gl.TEXTURE0);
   }
 
+  let _masterMaskApplyProg = null;
+
+  function _ensureMasterMaskApplyProg() {
+    if (_masterMaskApplyProg) return;
+
+    _masterMaskApplyProg = _buildProg(`
+uniform sampler2D uLayer;
+uniform sampler2D uMask;
+
+void main(){
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+
+    vec4 layer = texture2D(uLayer, uv);
+    float cov = texture2D(uMask, uv).a;
+    cov = clamp(cov, 0.0, 1.0);
+
+    float a = layer.a * cov;
+
+    if (a <= 0.004) {
+      gl_FragColor = vec4(0.0);
+    } else {
+      gl_FragColor = vec4(layer.rgb, a);
+    }
+}
+`);
+  }
+
+  function applyMasterMask(inputTex, w, h, time, targetFB) {
+    console.log("[MasterMask] applyMasterMask called", {
+        hasInputTex: !!inputTex,
+        w, h,
+        masksCount: MasterMaskState.masks.length,
+        enabledMasks: MasterMaskState.masks.filter(m => m.enabled).length,
+        hasProg: !!_masterMaskApplyProg
+    });
+
+    const hasMasterMask = MasterMaskState.masks.some(m => m.enabled);
+    if (!hasMasterMask) {
+        console.log("[MasterMask] No enabled masks, using passthrough");
+        _ensurePassthrough();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+        gl.viewport(0, 0, w, h);
+        gl.clearColor(0,0,0,0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        _drawQuadWithProg(_passthroughProg, inputTex, !!inputTex, [], time, w, h);
+        return;
+    }
+
+    const maskTex = _renderMaskTexture(MasterMaskState.masks, time, w, h);
+    console.log("[MasterMask] maskTex:", !!maskTex);
+    if (!maskTex) {
+        _ensurePassthrough();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+        gl.viewport(0, 0, w, h);
+        gl.clearColor(0,0,0,0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        _drawQuadWithProg(_passthroughProg, inputTex, !!inputTex, [], time, w, h);
+        return;
+    }
+
+    _ensureMasterMaskApplyProg();
+    console.log("[MasterMask] _masterMaskApplyProg:", !!_masterMaskApplyProg);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.useProgram(_masterMaskApplyProg);
+    gl.uniform2f(gl.getUniformLocation(_masterMaskApplyProg, 'iResolution'), w, h);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, inputTex);
+    gl.uniform1i(gl.getUniformLocation(_masterMaskApplyProg, 'uLayer'), 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, maskTex);
+    gl.uniform1i(gl.getUniformLocation(_masterMaskApplyProg, 'uMask'), 1);
+
+    const posLoc = gl.getAttribLocation(_masterMaskApplyProg, 'aPos');
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    gl.activeTexture(gl.TEXTURE0);
+    console.log("[MasterMask] Done");
+  }
+
   function renderFrame(layersData, time) {
     if (!gl) return;
     var canvas = gl.canvas;
@@ -2213,49 +2318,54 @@ uniform int uHasTexture;
       console.warn("[ShaderFlow] renderFrame aborted: invalid canvas size", w, h);
       return;
     }
-
-    if (!layersData || layersData.length === 0) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, w, h);
-      gl.clearColor(0,0,0,0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      if (!program) return;
-      _drawQuadWithProg(program, texture, !!texture, S.uniforms, time, w, h);
-      return;
-    }
-
+    const hasMasterMask = MasterMaskState.masks.some(m => m.enabled);
     const visible = layersData.filter(l => l.visible && l._prog);
+
     if (visible.length === 0) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, w, h);
       gl.clearColor(0,0,0,0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (texture && _passthroughProg) {
-        _drawQuadWithProg(_passthroughProg, texture, true, [], time, w, h);
+        _ensurePassthrough();
+        if (hasMasterMask) {
+          _ensurePingPong(w, h);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, pingPongFBs[0]);
+          gl.viewport(0, 0, w, h);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          _drawQuadWithProg(_passthroughProg, texture, true, [], time, w, h);
+          applyMasterMask(pingPongTexs[0], w, h, time, null);
+        } else {
+          _drawQuadWithProg(_passthroughProg, texture, true, [], time, w, h);
+        }
+      } else if (hasMasterMask) {
+        applyMasterMask(null, w, h, time, null);
       }
       return;
     }
 
     _ensurePingPong(w, h);
-
     let readIdx = 0, writeIdx = 1;
-    let prevTex = texture;          // результат ДО текущего слоя
+    let prevTex = texture;
     let hasFirst = !!texture;
-
     for (let i = 0; i < visible.length; i++) {
       const layer = visible[i];
       const isLast = i === visible.length - 1;
-      const targetFB = isLast ? null : pingPongFBs[writeIdx];
+      const drawToCanvas = isLast && !hasMasterMask;
+      const targetFB = drawToCanvas ? null : pingPongFBs[writeIdx];
       const inputTex = i === 0 ? prevTex : pingPongTexs[readIdx];
-
       const layerTex = _drawLayerToScratch(layer._prog, inputTex, i === 0 ? hasFirst : true, layer.uniforms, time, w, h);
       _applyLayerMask(prevTex, layerTex, layer.masks, time, targetFB, w, h);
-
-      prevTex = isLast ? null : pingPongTexs[writeIdx];
-      if (!isLast) { const tmp = readIdx; readIdx = writeIdx; writeIdx = tmp; }
+      prevTex = pingPongTexs[writeIdx];
+      if (!drawToCanvas) { const tmp = readIdx; readIdx = writeIdx; writeIdx = tmp; }
     }
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (hasMasterMask) {
+      applyMasterMask(prevTex, w, h, time, null);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
   }
 
   let _passthroughProg = null;
@@ -2380,11 +2490,27 @@ void main() {
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
-        if (texture && _passthroughProg) {
-          _ensurePassthrough();
-          _drawQuadWithProg(_passthroughProg, texture, true, [], t, canvas.width, canvas.height);
-        } else if (program) {
-          _drawQuadWithProg(program, texture, !!texture, S.uniforms, t, canvas.width, canvas.height);
+        const hasMasterMask = MasterMaskState.masks.some(m => m.enabled);
+        if (hasMasterMask) {
+          _ensurePingPong(canvas.width, canvas.height);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, pingPongFBs[0]);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          if (texture && _passthroughProg) {
+            _ensurePassthrough();
+            _drawQuadWithProg(_passthroughProg, texture, true, [], t, canvas.width, canvas.height);
+          } else if (program) {
+            _drawQuadWithProg(program, texture, !!texture, S.uniforms, t, canvas.width, canvas.height);
+          }
+          applyMasterMask(pingPongTexs[0], canvas.width, canvas.height, t, null);
+        } else {
+          if (texture && _passthroughProg) {
+            _ensurePassthrough();
+            _drawQuadWithProg(_passthroughProg, texture, true, [], t, canvas.width, canvas.height);
+          } else if (program) {
+            _drawQuadWithProg(program, texture, !!texture, S.uniforms, t, canvas.width, canvas.height);
+          }
         }
       } else {
         renderFrame(shaderLayers, t);
@@ -2426,12 +2552,42 @@ void main() {
     gl.clearColor(0,0,0,0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    if (!layers || layers.length === 0) {
-      if (program) {
-        _drawQuadWithProg(program, texture, !!texture, S.uniforms, getTime(), w, h);
-      } else if (texture) {
-        _ensurePassthrough();
-        _drawQuadWithProg(_passthroughProg, texture, true, [], getTime(), w, h);
+    const hasMasterMask = MasterMaskState.masks.some(m => m.enabled);
+    const visible = layers ? layers.filter(l => l.visible && l._prog) : [];
+
+    if (visible.length === 0) {
+      if (texture) {
+        if (hasMasterMask) {
+          _ensurePassthrough();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, pingPongFBs[0]);
+          gl.viewport(0, 0, w, h);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          _drawQuadWithProg(_passthroughProg, texture, true, [], getTime(), w, h);
+          applyMasterMask(pingPongTexs[0], w, h, getTime(), outFB);
+        } else {
+          _ensurePassthrough();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, outFB);
+          gl.viewport(0, 0, w, h);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          _drawQuadWithProg(_passthroughProg, texture, true, [], getTime(), w, h);
+        }
+      } else if (program) {
+        if (hasMasterMask) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, pingPongFBs[0]);
+          gl.viewport(0, 0, w, h);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          _drawQuadWithProg(program, texture, !!texture, S.uniforms, getTime(), w, h);
+          applyMasterMask(pingPongTexs[0], w, h, getTime(), outFB);
+        } else {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, outFB);
+          gl.viewport(0, 0, w, h);
+          gl.clearColor(0,0,0,0);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          _drawQuadWithProg(program, texture, !!texture, S.uniforms, getTime(), w, h);
+        }
       }
     } else {
       _ensurePingPong(w, h);
@@ -2444,20 +2600,25 @@ void main() {
       } else {
         let readIdx = 0, writeIdx = 1;
         let prevTex = texture;
+        const hasMasterMask = MasterMaskState.masks.some(m => m.enabled);
 
         for (let i = 0; i < visible.length; i++) {
           const layer = visible[i];
           const isLast = i === visible.length - 1;
-          const targetFB = isLast ? outFB : pingPongFBs[writeIdx];
+          const drawToOut = isLast && !hasMasterMask;
+          const targetFB = drawToOut ? outFB : pingPongFBs[writeIdx];
           const inputTex = i === 0 ? prevTex : pingPongTexs[readIdx];
-
           const layerTex = _drawLayerToScratch(layer._prog, inputTex, i === 0 ? !!texture : true, layer.uniforms, getTime(), w, h);
           _applyLayerMask(prevTex, layerTex, layer.masks, getTime(), targetFB, w, h);
-
-          prevTex = isLast ? null : pingPongTexs[writeIdx];
-          if (!isLast) {
+          prevTex = pingPongTexs[writeIdx];
+          if (!drawToOut) {
             const tmp = readIdx; readIdx = writeIdx; writeIdx = tmp;
           }
+        }
+
+        if (hasMasterMask) {
+          console.log("[MasterMask] Applying master mask in getPixels");
+          applyMasterMask(prevTex, w, h, getTime(), outFB);
         }
       }
     }
@@ -3053,6 +3214,7 @@ const MaskEditor = (() => {
   let maskCodeVisible = false, maskCodeTimer = null;
 
   function getLayer(kind, id) {
+    if (kind === 'master') return MasterMaskState;
     return ShaderLayers.getLayer(id);
   }
 
@@ -3272,6 +3434,7 @@ const MaskEditor = (() => {
     if (curKind === 'shader') ShaderLayers.renderList(); else ShaderLayers.renderList();
     renderPreview();
     renderMaskCode();
+    updateMasterMaskButton();
     UndoRedo.push();
   }
 
@@ -5634,7 +5797,8 @@ const UndoRedo = (() => {
             code: document.getElementById('code-editor').value,
             uniforms: JSON.parse(JSON.stringify(S.uniforms)),
             activeLayerId: ShaderLayers.getActive ? (ShaderLayers.getActive()?.id || null) : null,
-            shaderLayers: _cloneLayers(ShaderLayers.getAll())
+            shaderLayers: _cloneLayers(ShaderLayers.getAll()),
+            masterMask: MasterMaskState.masks.map(m => MaskModel.serialize(m))
         };
     }
     function _equal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
@@ -5680,6 +5844,14 @@ const UndoRedo = (() => {
             ShaderLayers.setAll(snap.shaderLayers);
             if (snap.activeLayerId && ShaderLayers.getLayer(snap.activeLayerId))
                 ShaderLayers.activateLayer(snap.activeLayerId);
+
+            if (snap.masterMask) {
+                MasterMaskState.masks = snap.masterMask.map(m => MaskModel.deserialize(m)).filter(Boolean);
+            } else {
+                MasterMaskState.masks = [];
+            }
+            updateMasterMaskButton();
+
             UniformsUI.renderAll(); updateLineNumbers(); compile();
             autoUpdatePanelsVisibility();
         }
@@ -6122,7 +6294,8 @@ const EffectSerializer = {
     return JSON.stringify({
       version: this.CURRENT_VERSION,
       name: effectName,
-      stages: stagesData
+      stages: stagesData,
+      masterMask: MasterMaskState.masks.map(m => MaskModel.serialize(m))
     }, null, 2);
   },
 
@@ -6135,6 +6308,13 @@ const EffectSerializer = {
       // Загружаем цепочку как стек Effect-слоёв (включая маски).
       ShaderLayers.clear();
       ShaderLayers.loadChain(data.stages);
+
+      if (data.masterMask) {
+        MasterMaskState.masks = data.masterMask.map(m => MaskModel.deserialize(m)).filter(Boolean);
+      } else {
+        MasterMaskState.masks = [];
+      }
+      updateMasterMaskButton();
 
       if (S.activeTab !== 'shader') switchTab('shader');
       UndoRedo.push();
@@ -6946,6 +7126,23 @@ const LibraryPreview = (() => {
   if (ul) _uniformObserver.observe(ul, { childList: true, subtree: true });
   autoTagUniforms();
 })();
+
+function updateMasterMaskButton() {
+    const btn = document.getElementById('btn-master-mask');
+    if (!btn) return;
+    const hasMasks = MasterMaskState.masks.length > 0;
+    if (hasMasks) {
+        btn.className = 'btn btn-primary';
+    } else {
+        btn.className = 'btn btn-ghost';
+    }
+}
+
+document.getElementById('btn-master-mask').addEventListener('click', () => {
+    openMaskEditor('master', 'master');
+});
+
+updateMasterMaskButton();
 </script>
 </body>
 </html>
