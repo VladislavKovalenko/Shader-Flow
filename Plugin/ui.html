@@ -1214,14 +1214,14 @@ body {
   <div id="topbar">
     <span class="topbar-title">≋ Shader Flow</span>
     <div class="topbar-sep"></div>
-    <button class="tab-pill active" data-tab="shader" data-tip="Вкладка шейдеров (слои с масками)">Shader</button>
-    <button class="tab-pill" data-tab="library" data-tip="Библиотека шейдеров (Basic и User)">Library</button>
-    <button class="tab-pill" data-tab="settings" data-tip="Настройки плагина">Settings</button>
+    <button class="tab-pill active" data-tab="shader" data-tip="Shader tab (layers with masks)">Shader</button>
+    <button class="tab-pill" data-tab="library" data-tip="Shader library (Basic and User)">Library</button>
+    <button class="tab-pill" data-tab="settings" data-tip="Plugin settings">Settings</button>
     <div class="topbar-sep"></div>
-    <button class="topbar-undo-btn" id="btn-undo" data-tip="Отменить последнее действие (Ctrl+Z)" disabled>↩</button>
-    <button class="topbar-undo-btn" id="btn-redo" data-tip="Вернуть отменённое действие (Ctrl+Y)" disabled>↪</button>
+    <button class="topbar-undo-btn" id="btn-undo" data-tip="Undo last action (Ctrl+Z)" disabled>↩</button>
+    <button class="topbar-undo-btn" id="btn-redo" data-tip="Redo last action (Ctrl+Y)" disabled>↪</button>
     <div class="topbar-right">
-      <span class="node-badge" id="node-badge" data-tip="Текущий выбранный слой в Figma">No selection</span>
+      <span class="node-badge" id="node-badge" data-tip="Currently selected Figma layer">No selection</span>
         </div>
       </div>
 
@@ -1237,7 +1237,7 @@ body {
             <span class="panel-title">Shader Layers</span>
             <span class="arrow-icon">▼</span>
           </div>
-          <button id="add-default-shader-btn" class="btn-add-layer-plus" title="Add Shader layer" data-tip="Добавить слой шейдера" style="background: none; border: none; cursor: pointer; font-weight: bold; padding: 2px 8px;">+</button>
+          <button id="add-default-shader-btn" class="btn-add-layer-plus" data-tip="Add shader layer" style="background: none; border: none; cursor: pointer; font-weight: bold; padding: 2px 8px;">+</button>
         </div>
         <div id="shader-layers" class="layers-list collapsible-content">
           <div id="shader-layers-empty-state" class="empty-state">No shader layers. Add one with +</div>
@@ -1254,24 +1254,24 @@ body {
             <input type="checkbox" id="exact-preview-input" checked>
             <span class="u-toggle-slider"></span>
           </label>
-          <span class="u-toggle-text" data-tip="Точное совпадение Preview с результатом экспорта">Exact Preview</span>
+          <span class="u-toggle-text" data-tip="Make Preview exactly match export result">Exact Preview</span>
         </div>
         <div class="u-toggle-wrap">
           <label class="u-toggle">
             <input type="checkbox" id="show-fps-input">
             <span class="u-toggle-slider"></span>
           </label>
-          <span class="u-toggle-text" data-tip="Показывать счётчик кадров в Preview">Show FPS</span>
+          <span class="u-toggle-text" data-tip="Show frame counter in Preview">Show FPS</span>
         </div>
         <div class="res-row" style="margin-top: 4px;">
-          <span class="res-label" data-tip="Цвет счётчика FPS в Preview">FPS Color</span>
+          <span class="res-label" data-tip="FPS counter color in Preview">FPS Color</span>
           <select id="fps-color-select" class="res-select">
             <option value="black">Black</option>
             <option value="white">White</option>
           </select>
         </div>
         <div class="res-row" style="margin-top: 4px;">
-          <span class="res-label" data-tip="Частота кадров анимации в Preview">Frame Rate</span>
+          <span class="res-label" data-tip="Animation frame rate in Preview">Frame Rate</span>
           <select id="frame-rate-select" class="res-select">
             <option value="60">60 FPS</option>
             <option value="30">30 FPS</option>
@@ -1280,7 +1280,7 @@ body {
           </select>
         </div>
         <div class="res-row" style="margin-top: 12px;">
-          <span class="res-label" data-tip="Масштаб интерфейса плагина (сохраняется между запусками)">UI Scale</span>
+          <span class="res-label" data-tip="Plugin UI scale (saved between launches)">UI Scale</span>
           <select class="res-select" id="ui-scale-select">
             <option value="1">100%</option>
             <option value="1.1">110%</option>
@@ -1305,9 +1305,9 @@ body {
           </select>
         </div>
         <div class="res-row" style="margin-top: 12px; flex-direction: column; align-items: flex-start; gap: 8px;">
-          <span class="res-label" data-tip="Папка с пользовательскими шейдерами (отображается в User Library)">Shader Library</span>
+          <span class="res-label" data-tip="Folder with user shaders (shown in User Library)">Shader Library</span>
           <div style="display: flex; gap: 8px; width: 100%;">
-            <label for="choose-library-input" class="btn-secondary" data-tip="Выбрать папку с шейдерами (.txt) — появятся в разделе User Library" style="flex: 1; text-align: center; cursor: pointer; line-height: 24px; display: inline-block;">
+            <label for="choose-library-input" class="btn-secondary" data-tip="Choose a folder with shader files (.txt); they will appear in User Library" style="flex: 1; text-align: center; cursor: pointer; line-height: 24px; display: inline-block;">
               Choose Shader Library...
             </label>
             <input type="file" id="choose-library-input" webkitdirectory directory multiple style="display: none;">
@@ -1315,9 +1315,9 @@ body {
           <span id="library-path-status" style="font-size: 10px; color: rgba(0,0,0,0.4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;">No library folder selected</span>
         </div>
         <div class="effects-actions-row" style="display: flex; gap: 6px; padding: 8px 0;">
-          <button id="load-effect-btn" class="btn-secondary" data-tip="Загрузить цепочку (шейдер) из файла в редактор" style="flex:1">Load Chain</button>
-          <button id="save-effect-btn" class="btn-primary" data-tip="Сохранить текущую цепочку (шейдер) в файл" style="flex:1">Save Chain</button>
-          <button id="export-shader-btn" class="btn-secondary" style="flex:1" title="Export Shader" data-tip="Экспортировать исходный код шейдера">Export Shader</button>
+          <button id="load-effect-btn" class="btn-secondary" data-tip="Load a chain (shader) from a file into the editor" style="flex:1">Load Chain</button>
+          <button id="save-effect-btn" class="btn-primary" data-tip="Save current chain (shader) to a file" style="flex:1">Save Chain</button>
+          <button id="export-shader-btn" class="btn-secondary" style="flex:1" data-tip="Export shader source code">Export Shader</button>
         </div>
       </div>
       <div id="library-tab-content" style="display: none; flex-direction: column; height: 100%; overflow: hidden;">
@@ -1356,10 +1356,10 @@ body {
         <canvas id="gl-canvas"></canvas>
         <div id="fps-label">-- fps</div>
         <div id="anim-overlay">
-          <button class="anim-btn" id="btn-flip-v" data-tip="Отразить Preview по вертикали (только показ, не сохраняется)">⇅</button>
-          <button class="anim-btn" id="btn-flip-h" data-tip="Отразить Preview по горизонтали (только показ, не сохраняется)">⇆</button>
-          <button class="anim-btn" id="btn-play" data-tip="Запустить или поставить на паузу анимацию">⏸</button>
-          <button class="anim-btn" id="btn-reset-time" data-tip="Сбросить время анимации в начало">↺</button>
+          <button class="anim-btn" id="btn-flip-v" data-tip="Flip Preview vertically (view only, not saved)">⇅</button>
+          <button class="anim-btn" id="btn-flip-h" data-tip="Flip Preview horizontally (view only, not saved)">⇆</button>
+          <button class="anim-btn" id="btn-play" data-tip="Play or pause animation">⏸</button>
+          <button class="anim-btn" id="btn-reset-time" data-tip="Reset animation time to start">↺</button>
         </div>
       </div>
     </div>
@@ -1370,12 +1370,12 @@ body {
   <div id="bottombar">
     <span id="status-label">Select a layer</span>
     <button class="btn btn-ghost" id="btn-master-mask" data-tip="Global mask applied after all shader layers">Master Mask</button>
-    <button class="btn btn-ghost" id="btn-show-code" data-tip="Показать или скрыть редактор кода" title="Show / Hide code">
+    <button class="btn btn-ghost" id="btn-show-code" data-tip="Show or hide code editor">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       Code
     </button>
-    <button class="btn btn-secondary" id="btn-add" data-tip="Наложить результат поверх выбранного слоя" disabled>Add on top</button>
-    <button class="btn btn-primary" id="btn-replace" data-tip="Заменить содержимое выбранного слоя результатом" disabled>Replace</button>
+    <button class="btn btn-secondary" id="btn-add" data-tip="Add result on top of selected layer" disabled>Add on top</button>
+    <button class="btn btn-primary" id="btn-replace" data-tip="Replace selected layer contents with result" disabled>Replace</button>
   </div>
 
   <div id="resize-handle"></div>
@@ -3344,7 +3344,7 @@ const UniformsUI = (() => {
     const delBtn = document.createElement('button');
     delBtn.className = 'uniform-delete';
     delBtn.textContent = '×';
-    delBtn.title = 'Удалить';
+    delBtn.setAttribute('data-tip', 'Delete parameter');
     delBtn.addEventListener('click', () => {
       S.uniforms.splice(idx, 1);
       renderAll();
@@ -3769,18 +3769,15 @@ const MaskEditor = (() => {
       const vis = document.createElement('button');
       vis.className = 'mask-vis' + (m.enabled ? '' : ' off');
       vis.textContent = m.enabled ? '◉' : '○';
-      vis.title = 'Enable / Disable';
       vis.addEventListener('click', e => { e.stopPropagation(); m.enabled = !m.enabled; afterChange(); renderList(); renderParams(); });
 
       const name = document.createElement('span');
       name.className = 'mask-name';
       name.textContent = (i + 1) + '. ' + (m.name || MASK_TYPES[m.type].label);
-      name.title = 'Double-click to rename';
 
       const del = document.createElement('button');
       del.className = 'mask-del';
       del.textContent = '×';
-      del.title = 'Delete';
       del.addEventListener('click', e => { e.stopPropagation(); removeMask(m.id); });
 
       vis.setAttribute('data-tip', 'Enable / disable the mask');
@@ -4872,7 +4869,7 @@ const MaskEditor = (() => {
       const b = document.createElement('button');
       b.className = 'mask-clear-btn';
       b.textContent = text;
-      b.title = title;
+      b.setAttribute('data-tip', title);
 
       b.addEventListener('click', () => {
         onClick();
@@ -6346,21 +6343,21 @@ uniform int uHasTexture;
 
       const visBtn = document.createElement('button');
       visBtn.className = 'effect-layer-vis' + (layer.visible ? '' : ' hidden-layer');
-      visBtn.title = layer.visible ? 'Скрыть' : 'Показать';
+      visBtn.setAttribute('data-tip', layer.visible ? 'Hide layer' : 'Show layer');
       visBtn.textContent = layer.visible ? '◉' : '○';
       visBtn.addEventListener('click', e => { e.stopPropagation(); toggleVisible(layer.id); });
 
       const delBtn = document.createElement('button');
       delBtn.className = 'effect-layer-del';
       delBtn.textContent = '×';
-      delBtn.title = 'Удалить';
+      delBtn.setAttribute('data-tip', 'Delete layer');
       delBtn.addEventListener('click', e => { e.stopPropagation(); remove(layer.id); });
 
       const maskBtn = document.createElement('button');
       maskBtn.className = 'effect-layer-masks';
       const maskCount = (layer.masks || []).length;
       maskBtn.textContent = '▦' + (maskCount ? maskCount : '');
-      maskBtn.title = 'Маски слоя (' + maskCount + ')';
+      maskBtn.setAttribute('data-tip', 'Layer masks (' + maskCount + ')');
       maskBtn.addEventListener('click', e => { e.stopPropagation(); openMaskEditor('shader', layer.id); });
 
       row.append(nameEl, visBtn, maskBtn, delBtn);
@@ -7556,7 +7553,6 @@ const LibraryPreview = (() => {
 
         if (msg.hasNode) {
           badge.textContent = msg.nodeName || "Unknown";
-          badge.title = msg.nodeName || "";
           if (btnAdd) btnAdd.disabled = false;
           if (btnReplace) btnReplace.disabled = false;
         } else {
@@ -7743,6 +7739,56 @@ const LibraryPreview = (() => {
   tip.id = 'tooltip';
   document.body.appendChild(tip);
 
+  // =============================================================
+  // Normalize native title tooltips into the custom data-tip system
+  // =============================================================
+  function convertTitleToDataTip(el) {
+    if (!el || el.nodeType !== 1 || !el.hasAttribute) return;
+
+    if (!el.hasAttribute('title')) return;
+
+    const titleText = el.getAttribute('title');
+
+    if (titleText && !el.hasAttribute('data-tip')) {
+      el.setAttribute('data-tip', titleText);
+    }
+
+    el.removeAttribute('title');
+  }
+
+  function normalizeTitleAttributes(root) {
+    if (!root || root.nodeType !== 1) return;
+
+    convertTitleToDataTip(root);
+
+    if (root.querySelectorAll) {
+      root.querySelectorAll('[title]').forEach(convertTitleToDataTip);
+    }
+  }
+
+  normalizeTitleAttributes(document.body);
+
+  const titleObserver = new MutationObserver(mutations => {
+    mutations.forEach(mut => {
+      if (mut.type === 'attributes' && mut.attributeName === 'title') {
+        convertTitleToDataTip(mut.target);
+      }
+
+      if (mut.type === 'childList') {
+        mut.addedNodes.forEach(node => {
+          normalizeTitleAttributes(node);
+        });
+      }
+    });
+  });
+
+  titleObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['title'],
+    childList: true,
+    subtree: true
+  });
+
   const HOLD_MS = 1000;
   let hoverEl = null;
   let timer = null;
@@ -7799,15 +7845,17 @@ const LibraryPreview = (() => {
 
   // Авто-подпись строк параметров (uniform rows) по имени параметра.
   const UNIFORM_HINTS = {
-    uSpeed: 'Скорость анимации шейдера.', uScale: 'Масштаб узора.',
-    uColor1: 'Первый цвет градиента.', uColor2: 'Второй цвет градиента.'
+    uSpeed: 'Shader animation speed.',
+    uScale: 'Pattern scale.',
+    uColor1: 'First gradient color.',
+    uColor2: 'Second gradient color.'
   };
   function autoTagUniforms() {
     document.querySelectorAll('#uniforms-list .u-row, #uniforms-list .uniform-row, #uniforms-list .param-row').forEach(row => {
       if (row.hasAttribute('data-tip')) return;
       const label = row.querySelector('.u-label, .uniform-label, label');
       const name = label ? label.textContent.trim() : '';
-      const hint = UNIFORM_HINTS[name] || (name ? 'Параметр шейдера «' + name + '».' : '');
+      const hint = UNIFORM_HINTS[name] || (name ? 'Shader parameter "' + name + '".' : '');
       if (hint) row.setAttribute('data-tip', hint);
     });
   }
