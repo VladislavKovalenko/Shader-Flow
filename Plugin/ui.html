@@ -1189,6 +1189,22 @@ body {
 }
 .mask-clear-btn:hover { background: var(--danger); }
 
+/* Force select to shrink and never overflow its row */
+.res-select {
+  min-width: 0;
+  max-width: 100%;
+}
+/* Label must not force row to expand either */
+.res-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Settings tab must scroll internally instead of pushing layout */
+#settings-tab-content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
   </style>
 </head>
 <body>
@@ -1277,14 +1293,15 @@ body {
           </select>
         </div>
         <div class="res-row" style="margin-top: 12px;">
-          <span class="res-label" data-tip="Размер экспортируемого изображения">Render Size</span>
+          <span class="res-label" data-tip="Render output resolution">Render Size</span>
           <select class="res-select" id="res-select">
-            <option value="preview">Preview size</option>
             <option value="512">512 × 512</option>
             <option value="1024">1024 × 1024</option>
             <option value="2048">2048 × 2048</option>
             <option value="4096">4096 × 4096</option>
+            <option value="8192">8192 × 8192 (max)</option>
             <option value="node" selected>Node size</option>
+            <option value="image">Image Origin</option>
           </select>
         </div>
         <div class="res-row" style="margin-top: 12px; flex-direction: column; align-items: flex-start; gap: 8px;">
@@ -1519,6 +1536,8 @@ const S = {
   nodeHeight: 0,
   hasTexture: false,
   textureImage: null,
+  imageOriginWidth: 0,
+  imageOriginHeight: 0,
   animated: true,
   startTime: performance.now(),
   timeOffset: 0,
@@ -1694,6 +1713,8 @@ uniform int uHasTexture;
   }
 
   function _ensurePingPong(w, h) {
+    w = Math.max(1, Math.round(w || 1));
+    h = Math.max(1, Math.round(h || 1));
     if (ppWidth === w && ppHeight === h && pingPongFBs[0]) return;
     for (let i = 0; i < 2; i++) {
       if (pingPongTexs[i]) { gl.deleteTexture(pingPongTexs[i]); pingPongTexs[i] = null; }
@@ -1780,6 +1801,8 @@ uniform int uHasTexture;
   let MASK_FRAG_SRC = '';
 
   function _ensureMaskFB(w, h) {
+    w = Math.max(1, Math.round(w || 1));
+    h = Math.max(1, Math.round(h || 1));
     if (_maskW === w && _maskH === h && _maskFB) return;
     if (_maskTex) gl.deleteTexture(_maskTex);
     if (_maskFB) gl.deleteFramebuffer(_maskFB);
@@ -2183,8 +2206,13 @@ uniform int uHasTexture;
 
   function renderFrame(layersData, time) {
     if (!gl) return;
-    const canvas = gl.canvas;
-    const w = canvas.width, h = canvas.height;
+    var canvas = gl.canvas;
+    var w = canvas.width;
+    var h = canvas.height;
+    if (!w || !h || w < 1 || h < 1) {
+      console.warn("[ShaderFlow] renderFrame aborted: invalid canvas size", w, h);
+      return;
+    }
 
     if (!layersData || layersData.length === 0) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -2373,6 +2401,9 @@ void main() {
   }
 
   function getPixels(w, h) {
+    if (!gl) return null;
+    w = Math.max(1, Math.round(w || 1));
+    h = Math.max(1, Math.round(h || 1));
     _ensurePingPong(w, h);
 
     let layers = null;
@@ -2452,6 +2483,8 @@ void main() {
   }
   function renderGenerateToTexture(w, h, time) {
     if (!program) return null;
+    w = Math.max(1, Math.round(w || 1));
+    h = Math.max(1, Math.round(h || 1));
 
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -6153,24 +6186,22 @@ const LibraryPreview = (() => {
     const wrap = document.getElementById('preview-canvas-wrap');
     const displayW = wrap.clientWidth;
     const displayH = wrap.clientHeight;
-    let renderW = displayW, renderH = displayH, exact = false;
+    let renderW = displayW, renderH = displayH;
     if (S.resolution === 'node') {
       if (S.nodeWidth > 0 && S.nodeHeight > 0) {
         renderW = Math.min(S.nodeWidth, 4096);
         renderH = Math.min(S.nodeHeight, 4096);
-        exact = true;
       }
-    } else if (S.resolution !== 'preview') {
+    } else if (S.resolution !== 'image' && S.resolution !== 'preview') {
       const f = parseInt(S.resolution, 10);
-      if (f > 0) { renderW = f; renderH = f; exact = true; }
+      if (f > 0) { renderW = f; renderH = f; }
     }
     if (canvas.width !== renderW || canvas.height !== renderH) {
       canvas.width = renderW; canvas.height = renderH;
     }
     canvas.style.width = displayW + 'px';
     canvas.style.height = displayH + 'px';
-    document.getElementById('preview-size-label').textContent =
-      exact ? `${renderW} × ${renderH} ✦` : `${displayW} × ${displayH}`;
+    updatePreviewSizeLabel();
   }
 
   resizeCanvas();
@@ -6395,6 +6426,7 @@ const LibraryPreview = (() => {
   document.getElementById('res-select').addEventListener('change', e => {
     S.resolution = e.target.value;
     resizeCanvas();
+    updatePreviewSizeLabel();
   });
 
   document.getElementById('exact-preview-input').addEventListener('change', e => {
@@ -6540,22 +6572,51 @@ const LibraryPreview = (() => {
     executeApply(method);
   }
 
+  function getExportDimensions() {
+    var w, h;
+    if (S.resolution === "node") {
+      w = S.nodeWidth || 512;
+      h = S.nodeHeight || 512;
+    } else if (S.resolution === "image") {
+      w = S.imageOriginWidth || S.nodeWidth || 512;
+      h = S.imageOriginHeight || S.nodeHeight || 512;
+    } else {
+      w = parseInt(S.resolution, 10) || 512;
+      h = parseInt(S.resolution, 10) || 512;
+    }
+    w = Math.max(1, Math.round(w));
+    h = Math.max(1, Math.round(h));
+    return { w: w, h: h };
+  }
+
+  function updatePreviewSizeLabel() {
+    var label = document.getElementById("preview-size-label");
+    if (!label) return;
+    var dims = getExportDimensions();
+    label.textContent = dims.w + " \u00D7 " + dims.h;
+  }
+
   async function executeApply(method) {
     btnReplace.disabled = true; btnAdd.disabled = true;
     setStatus('Rendering...', 'info');
 
-    const glc = document.getElementById('gl-canvas');
-    let rw, rh;
-    switch (S.resolution) {
-      case 'preview': rw = glc.width;   rh = glc.height;   break;
-      case 'node':    rw = S.nodeWidth; rh = S.nodeHeight; break;
-      default:        rw = rh = parseInt(S.resolution) || 512;
+    var dims = getExportDimensions();
+    console.log("[ShaderFlow] Exporting at", dims.w, "x", dims.h, "mode:", S.resolution);
+
+    if (!S.hasTexture) {
+      console.warn("[ShaderFlow] No texture loaded; shader will run without input image.");
     }
-    if (!rw || !rh) { rw = 512; rh = 512; }
-    rw = Math.min(rw, 4096); rh = Math.min(rh, 4096);
 
     try {
-      const { pixels, width, height } = GL.getPixels(rw, rh);
+      var result = GL.getPixels(dims.w, dims.h);
+      if (!result || !result.pixels || result.pixels.length !== dims.w * dims.h * 4) {
+        setStatus("Render failed: pixel buffer mismatch", "error");
+        console.error("[ShaderFlow] Bad buffer. Expected:", dims.w * dims.h * 4, "Got:", result ? result.pixels.length : "null");
+        btnReplace.disabled = false;
+        btnAdd.disabled = false;
+        return;
+      }
+      const { pixels, width, height } = result;
       const oc = document.createElement('canvas'); oc.width = width; oc.height = height;
       oc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
       const blob = await new Promise(res => oc.toBlob(res, 'image/png'));
@@ -6616,33 +6677,73 @@ const LibraryPreview = (() => {
 
     switch (msg.type) {
       case 'selectionInfo': {
-        const bRepl = document.getElementById('btn-replace');
-        const bAdd  = document.getElementById('btn-add');
+        S.nodeId = msg.nodeId;
+        S.nodeName = msg.nodeName;
 
-        if (!msg.hasNode) {
-          S.nodeId = null; S.nodeName = null;
-          document.getElementById('node-badge').textContent = 'No selection';
-          bRepl.disabled = true; bAdd.disabled = true;
-          GL.clearTexture(); S.textureImage = null;
-          setStatus('Select a layer in Figma', '');
-          break;
+        var badge = document.getElementById("node-badge");
+        var btnAdd = document.getElementById("btn-add");
+        var btnReplace = document.getElementById("btn-replace");
+
+        if (msg.hasNode) {
+          badge.textContent = msg.nodeName || "Unknown";
+          badge.title = msg.nodeName || "";
+          if (btnAdd) btnAdd.disabled = false;
+          if (btnReplace) btnReplace.disabled = false;
+        } else {
+          badge.textContent = "No selection";
+          if (btnAdd) btnAdd.disabled = true;
+          if (btnReplace) btnReplace.disabled = true;
         }
 
-        S.nodeId     = msg.nodeId;
-        S.nodeName   = msg.nodeName;
-        S.nodeWidth  = msg.nodeWidth  || 0;
-        S.nodeHeight = msg.nodeHeight || 0;
-        document.getElementById('node-badge').textContent = '▪ ' + msg.nodeName;
-        bRepl.disabled = false; bAdd.disabled = false;
+        if (msg.error) {
+          setStatus("Error loading image: " + msg.error, "error");
+        }
 
-        if (msg.hasImage && msg.imageBase64) {
-          const img = new Image();
-          img.onload = () => { S.textureImage = img; GL.uploadTexture(img); };
-          img.src = `data:${msg.imageMime || 'image/png'};base64,${msg.imageBase64}`;
-          setStatus('Layer: ' + msg.nodeName, '');
+        // Round and clamp incoming dimensions immediately so export never sees undefined.
+        var rawW = (typeof msg.nodeWidth === "number" && !isNaN(msg.nodeWidth)) ? msg.nodeWidth : 0;
+        var rawH = (typeof msg.nodeHeight === "number" && !isNaN(msg.nodeHeight)) ? msg.nodeHeight : 0;
+
+        if (msg.imageBase64) {
+          var img = new Image();
+          img.onload = function() {
+            var nw = rawW > 0 ? rawW : (img.naturalWidth || 512);
+            var nh = rawH > 0 ? rawH : (img.naturalHeight || 512);
+            S.nodeWidth = Math.max(1, Math.round(nw));
+            S.nodeHeight = Math.max(1, Math.round(nh));
+            S.imageOriginWidth = img.naturalWidth || nw;
+            S.imageOriginHeight = img.naturalHeight || nh;
+            S.hasTexture = true;
+            GL.uploadTexture(img);
+            S.textureImage = img;
+            updatePreviewSizeLabel();
+            setStatus("Layer: " + (msg.nodeName || "Unknown"), "info");
+            console.log("[ShaderFlow] Image OK. Dims:", S.nodeWidth, "x", S.nodeHeight, "Origin:", S.imageOriginWidth, "x", S.imageOriginHeight);
+          };
+          img.onerror = function() {
+            setStatus("Failed to decode image", "error");
+            S.hasTexture = false;
+            GL.clearTexture();
+            S.textureImage = null;
+            S.nodeWidth = Math.max(1, Math.round(rawW || 512));
+            S.nodeHeight = Math.max(1, Math.round(rawH || 512));
+            updatePreviewSizeLabel();
+          };
+          img.src = "data:" + msg.imageMime + ";base64," + msg.imageBase64;
         } else {
-          GL.clearTexture(); S.textureImage = null;
-          setStatus('Layer: ' + msg.nodeName + ' (no image fill)', '');
+          S.hasTexture = false;
+          GL.clearTexture();
+          S.textureImage = null;
+          if (msg.hasNode) {
+            S.nodeWidth = Math.max(1, Math.round(rawW || 512));
+            S.nodeHeight = Math.max(1, Math.round(rawH || 512));
+            setStatus("Layer: " + (msg.nodeName || "Unknown") + " (no image fill)", "info");
+          } else {
+            S.nodeWidth = 512;
+            S.nodeHeight = 512;
+            setStatus("Select a layer", "");
+          }
+          updatePreviewSizeLabel();
+          console.log("[ShaderFlow] No image. Dims:", S.nodeWidth, "x", S.nodeHeight);
         }
         break;
       }

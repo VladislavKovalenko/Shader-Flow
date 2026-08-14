@@ -4,7 +4,7 @@ figma.showUI(__html__, {
   title: "Shader Flow"
 });
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// --- Helpers ---
 
 function uint8ArrayToBase64(bytes) {
   var binary = "";
@@ -23,7 +23,21 @@ function detectMime(bytes) {
   return "image/png";
 }
 
-// ─── Загрузка изображения со слоя ─────────────────────────────────────────
+// Safe dimension extraction for any node type (VectorNode, BooleanOperationNode, etc.)
+function getNodeDimensions(node) {
+  if (typeof node.width === "number" && typeof node.height === "number" && node.width > 0 && node.height > 0) {
+    return { width: Math.round(node.width), height: Math.round(node.height) };
+  }
+  if (node.absoluteBoundingBox && typeof node.absoluteBoundingBox.width === "number") {
+    return {
+      width: Math.max(1, Math.round(node.absoluteBoundingBox.width)),
+      height: Math.max(1, Math.round(node.absoluteBoundingBox.height))
+    };
+  }
+  return { width: 512, height: 512 };
+}
+
+// --- Load image from selected layer ---
 
 async function loadImageFromSelection() {
   var sel = figma.currentPage.selection;
@@ -34,6 +48,7 @@ async function loadImageFromSelection() {
   }
 
   var node = sel[0];
+  var dims = getNodeDimensions(node);
 
   var imageFill = null;
   if (Array.isArray(node.fills) && node.fills.length > 0) {
@@ -52,8 +67,8 @@ async function loadImageFromSelection() {
       hasNode: true,
       nodeId: node.id,
       nodeName: node.name,
-      nodeWidth: node.width,
-      nodeHeight: node.height
+      nodeWidth: dims.width,
+      nodeHeight: dims.height
     });
     return;
   }
@@ -62,6 +77,8 @@ async function loadImageFromSelection() {
     var image = figma.getImageByHash(imageFill.imageHash);
     if (!image) throw new Error("Image not found");
     var bytes = await image.getBytesAsync();
+    if (!bytes || bytes.length === 0) throw new Error("Empty image bytes");
+
     var base64 = uint8ArrayToBase64(bytes);
     var mime = detectMime(bytes);
 
@@ -71,8 +88,8 @@ async function loadImageFromSelection() {
       hasNode: true,
       nodeId: node.id,
       nodeName: node.name,
-      nodeWidth: node.width,
-      nodeHeight: node.height,
+      nodeWidth: dims.width,
+      nodeHeight: dims.height,
       imageBase64: base64,
       imageMime: mime
     });
@@ -83,18 +100,19 @@ async function loadImageFromSelection() {
       hasNode: true,
       nodeId: node.id,
       nodeName: node.name,
-      nodeWidth: node.width,
-      nodeHeight: node.height
+      nodeWidth: dims.width,
+      nodeHeight: dims.height,
+      error: String(err.message || err)
     });
   }
 }
 
-// ─── Применение результата (Replace / Add) ─────────────────────────────────
+// --- Apply result (Replace / Add) ---
 
 async function applyImage(nodeId, base64, method) {
   var node = await figma.getNodeByIdAsync(nodeId);
   if (!node) {
-    figma.ui.postMessage({ type: "applyError", message: "Слой не найден" });
+    figma.ui.postMessage({ type: "applyError", message: "Layer not found" });
     return;
   }
 
@@ -107,7 +125,7 @@ async function applyImage(nodeId, base64, method) {
     var fills = Array.isArray(node.fills) ? node.fills.slice() : [];
     var newFill = { type: "IMAGE", imageHash: newImage.hash, scaleMode: "FILL" };
 
-    if (method === 'replace') {
+    if (method === "replace") {
       var replaced = false;
       for (var j = fills.length - 1; j >= 0; j--) {
         if (fills[j].type === "IMAGE" && fills[j].visible !== false) {
@@ -119,7 +137,7 @@ async function applyImage(nodeId, base64, method) {
         }
       }
       if (!replaced) fills.push(newFill);
-    } else if (method === 'add') {
+    } else if (method === "add") {
       fills.push(newFill);
     }
 
@@ -130,9 +148,11 @@ async function applyImage(nodeId, base64, method) {
   }
 }
 
-function resizeWindow(w, h) { figma.ui.resize(w, h); }
+function resizeWindow(w, h) {
+  figma.ui.resize(w, h);
+}
 
-// ─── Сообщения от UI ────────────────────────────────────────────────────────
+// --- Messages from UI ---
 
 figma.ui.onmessage = async function(msg) {
   if (msg.type === "requestImage") {
@@ -143,28 +163,28 @@ figma.ui.onmessage = async function(msg) {
   } else if (msg.type === "resize") {
     resizeWindow(msg.width, msg.height);
   } else if (msg.type === "save-library-data") {
-    await figma.clientStorage.setAsync('shader_library_cached_data', msg.data);
+    await figma.clientStorage.setAsync("shader_library_cached_data", msg.data);
   } else if (msg.type === "get-cached-library") {
-    var cachedData = await figma.clientStorage.getAsync('shader_library_cached_data');
+    var cachedData = await figma.clientStorage.getAsync("shader_library_cached_data");
     if (cachedData) {
-      figma.ui.postMessage({ type: 'restore-library-data', data: cachedData });
+      figma.ui.postMessage({ type: "restore-library-data", data: cachedData });
     }
   } else if (msg.type === "save-ui-scale") {
-    await figma.clientStorage.setAsync('shaderflow_ui_scale', msg.scale);
+    await figma.clientStorage.setAsync("shaderflow_ui_scale", msg.scale);
   } else if (msg.type === "get-ui-scale") {
-    var savedScale = await figma.clientStorage.getAsync('shaderflow_ui_scale');
+    var savedScale = await figma.clientStorage.getAsync("shaderflow_ui_scale");
     if (savedScale) {
-      figma.ui.postMessage({ type: 'restore-ui-scale', scale: savedScale });
+      figma.ui.postMessage({ type: "restore-ui-scale", scale: savedScale });
     }
   }
 };
 
-// ─── События выделения ──────────────────────────────────────────────────────
+// --- Selection events ---
 
 figma.on("selectionchange", function() {
   loadImageFromSelection();
 });
 
-// ─── Старт ─────────────────────────────────────────────────────────────────
+// --- Start ---
 
 loadImageFromSelection();
