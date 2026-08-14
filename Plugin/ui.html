@@ -1205,6 +1205,37 @@ body {
   min-height: 0;
 }
 
+/* ── Library file type icons ── */
+.lib-file-icon {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    border-radius: 4px;
+    margin-right: 6px;
+}
+.lib-file-icon.type-sfshader {
+    background: rgba(185, 255, 102, 0.25);
+    border: 1px solid rgba(25, 26, 35, 0.3);
+}
+.lib-file-icon.type-sfchain {
+    background: rgba(109, 179, 255, 0.20);
+    border: 1px solid rgba(109, 179, 255, 0.4);
+}
+.lib-file-icon.type-txt {
+    background: rgba(0, 0, 0, 0.06);
+    border: 1px solid rgba(0, 0, 0, 0.15);
+}
+.lib-file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
   </style>
 </head>
 <body>
@@ -1315,7 +1346,6 @@ body {
           <span id="library-path-status" style="font-size: 10px; color: rgba(0,0,0,0.4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;">No library folder selected</span>
         </div>
         <div class="effects-actions-row" style="display: flex; gap: 6px; padding: 8px 0;">
-          <button id="load-effect-btn" class="btn-secondary" data-tip="Load a chain (shader) from a file into the editor" style="flex:1">Load Chain</button>
           <button id="save-effect-btn" class="btn-primary" data-tip="Save current chain (shader) to a file" style="flex:1">Save Chain</button>
           <button id="export-shader-btn" class="btn-secondary" style="flex:1" data-tip="Export shader source code">Export Shader</button>
         </div>
@@ -1514,6 +1544,26 @@ const DEFAULT_SHADER_TEMPLATE = `// ══════════════�
 //      uniform vec3 uGlowColor;   // color picker ✓
 //      uniform vec3 uAccentCol;   // color picker ✓
 //      uniform vec3 uOffset;      // three number inputs (no "color" in name)
+//
+//  ━━ NAMING CONVENTIONS (auto-detected ranges) ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//  Shader Flow analyzes parameter NAMES to set smart slider ranges:
+//
+//    float uCount, uTiles, uAmount, uIterations  → slider [1..100]
+//    float uAngle, uRotation, uTwist             → slider [0..360]
+//    float uSpeed, uFrequency, uRate             → slider [0..5]
+//    float uScale, uRadius, uSize, uWidth        → slider [0..10]
+//    float uOpacity, uStrength, uMix, uBlend     → slider [0..1]
+//    float uOffset, uShift, uBias                → slider [-1..1]
+//    float uDistort, uWarp, uCurve               → slider [0..2]
+//    float uSoftness, uBlur, uFeather            → slider [0..1]
+//
+//    vec3  uMyColor, uBaseCol, uAccentColor      → COLOR PICKER (auto!)
+//    vec3  uOffset, uPosition                    → three number inputs
+//
+//  You can ALWAYS adjust ranges manually in the Parameters panel after compile.
+//
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
 //  ━━ GLSL TIPS FOR THIS PLUGIN ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
@@ -3243,11 +3293,82 @@ const UniformParser = (() => {
 
   function makeDefault(name, glslType) {
     switch (glslType) {
-      case 'float':     return { name, type: 'float',     value: 0.5, min: 0.0, max: 1.0 };
-      case 'int':       return { name, type: 'int',       value: 0,   min: 0,   max: 10  };
+      case 'float': {
+        // Умные диапазоны на основе имени параметра
+        let min = 0.0, max = 1.0, value = 0.5;
+        const ln = name.toLowerCase();
+
+        // Количество / счётчики
+        if (/count|tile|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
+          min = 1; max = 100; value = 10;
+        }
+        // Углы и повороты
+        else if (/angle|rotat|degree|rot|turn|twist/i.test(ln)) {
+          min = 0; max = 360; value = 0;
+        }
+        // Размеры и масштабы
+        else if (/scale|radius|size|width|height|thick|border|length|dist|range/i.test(ln)) {
+          min = 0; max = 10; value = 1;
+        }
+        // Скорость и частота
+        else if (/speed|freq|rate|velocity|pace|tempo/i.test(ln)) {
+          min = 0; max = 5; value = 1;
+        }
+        // Прозрачность и интенсивность
+        else if (/opacity|alpha|strength|intensity|mix|blend|power|factor|weight/i.test(ln)) {
+          min = 0; max = 1; value = 0.5;
+        }
+        // Смещения (могут быть отрицательными)
+        else if (/offset|shift|bias|displace|drift|translate|move|pan/i.test(ln)) {
+          min = -1; max = 1; value = 0;
+        }
+        // Искажения
+        else if (/distort|warp|bend|curve|twist|ripple|wave/i.test(ln)) {
+          min = 0; max = 2; value = 0.5;
+        }
+        // Время и задержки
+        else if (/time|delay|duration|period|phase/i.test(ln)) {
+          min = 0; max = 10; value = 1;
+        }
+        // Позиции (0..1 для UV)
+        else if (/pos|center|origin|anchor|pivot/i.test(ln)) {
+          min = 0; max = 1; value = 0.5;
+        }
+        // Детализация и качество
+        else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
+          min = 1; max = 8; value = 4;
+        }
+        // Мягкость и размытие
+        else if (/soft|blur|smooth|feather|fade|sharp/i.test(ln)) {
+          min = 0; max = 1; value = 0.1;
+        }
+
+        return { name, type: 'float', value, min, max };
+      }
+      case 'int': {
+        let min = 0, max = 10, value = 5;
+        const ln = name.toLowerCase();
+
+        if (/count|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
+          min = 1; max = 100; value = 10;
+        } else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
+          min = 1; max = 8; value = 4;
+        } else if (/sides|points|edges|vertices/i.test(ln)) {
+          min = 3; max = 12; value = 6;
+        }
+
+        return { name, type: 'int', value, min, max };
+      }
       case 'bool':      return { name, type: 'bool',      value: false };
       case 'vec2':      return { name, type: 'vec2',      value: [0.5, 0.5] };
-      case 'vec3':      return { name, type: 'vec3',      value: [0.5, 0.5, 0.5] };
+      case 'vec3': {
+        const isColor = /color|col/i.test(name);
+        return {
+          name,
+          type: isColor ? 'vec3color' : 'vec3',
+          value: [0.5, 0.5, 0.5]
+        };
+      }
       case 'vec4':
       case 'sampler2D': return null;
       default:          return { name, type: 'float', value: 0.5, min: 0, max: 1 };
@@ -6333,7 +6454,7 @@ uniform int uHasTexture;
       })),
       visible: true,
       _prog: prog,
-      masks: [],
+      masks: (preset.masks || []).map(m => MaskModel.deserialize(m)).filter(Boolean),
     };
     layers.push(layer);
     activeLayerId = id;
@@ -6869,7 +6990,9 @@ const LibraryManager = {
   handleFolderSelect(files) {
     if (!files || files.length === 0) return;
 
-    this.cachedFiles = Array.from(files).filter(file => file.name.endsWith('.txt'));
+    this.cachedFiles = Array.from(files).filter(file =>
+      /\.(txt|sfshader|sfchain)$/i.test(file.name)
+    );
 
     if (this.cachedFiles.length > 0) {
       const rootName = this.cachedFiles[0].webkitRelativePath.split('/')[0];
@@ -6896,6 +7019,7 @@ const LibraryManager = {
       targetSubfolder[preset.name + '.txt'] = {
         _type: 'file',
         shaderType: preset.type,
+        fileFormat: 'txt',
         uniforms: preset.uniforms,
         fileRef: { name: preset.name + '.txt', text: () => Promise.resolve(preset.content) }
       };
@@ -6912,7 +7036,13 @@ const LibraryManager = {
         pathParts.forEach((part, index) => {
           if (index === pathParts.length - 1) {
             const isGenerate = part.toLowerCase().includes('gen');
-            current[part] = { _type: 'file', shaderType: isGenerate ? 'Generate' : 'Effect', fileRef: file };
+            const fmt = SfShader.detectFormat(part);
+            current[part] = {
+              _type: 'file',
+              shaderType: isGenerate ? 'Generate' : 'Effect',
+              fileFormat: fmt,
+              fileRef: file
+            };
           } else {
             if (!current[part]) current[part] = createDir();
             current = current[part].files;
@@ -6963,47 +7093,133 @@ const LibraryManager = {
         const fileEl = document.createElement('div');
         fileEl.className = 'lib-file';
 
-        const nameSpan = document.createElement('span');
-        nameSpan.innerText = `📄 ${key.replace('.txt', '')}`;
-        fileEl.appendChild(nameSpan);
+        // Определяем формат и иконку
+        const fmt = item.fileFormat || SfShader.detectFormat(key);
+        const iconMap = {
+          sfshader: { symbol: '◆', cls: 'type-sfshader', label: 'Shader' },
+          sfchain:  { symbol: '⛓', cls: 'type-sfchain',  label: 'Chain'  },
+          txt:      { symbol: '≡', cls: 'type-txt',      label: 'GLSL'   }
+        };
+        const icon = iconMap[fmt] || iconMap.txt;
 
-        const addShaderFromLib = async () => {
-          const code = await item.fileRef.text();
+        const iconEl = document.createElement('span');
+        iconEl.className = 'lib-file-icon ' + icon.cls;
+        iconEl.textContent = icon.symbol;
+        iconEl.setAttribute('data-tip', icon.label + ' file');
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'lib-file-name';
+        nameSpan.textContent = key.replace(/\.(txt|sfshader|sfchain)$/i, '');
+
+        fileEl.append(iconEl, nameSpan);
+
+        const fileName = key.replace(/\.(txt|sfshader|sfchain)$/i, '');
+
+        // ── Вспомогательная: парсит файл в { code, uniforms } ──
+        const parseLibFile = async () => {
+          const raw = await item.fileRef.text();
+
+          if (item.fileFormat === 'sfshader') {
+            try {
+              return SfShader.parse(raw);
+            } catch (e) {
+              console.warn('[ShaderFlow] Bad .sfshader, fallback to raw GLSL:', e);
+              return {
+                name: fileName,
+                code: raw,
+                uniforms: UniformParser.sync([], UniformParser.parse(raw)),
+                masks: []
+              };
+            }
+          }
+
+          if (item.fileFormat === 'sfchain') {
+            return null; // цепочки обрабатываются отдельно
+          }
+
+          // .txt — чистый GLSL
+          const code = raw;
           let uniforms = item.uniforms;
           if (!Array.isArray(uniforms) || uniforms.length === 0) {
             uniforms = UniformParser.sync([], UniformParser.parse(code));
           }
+          return { name: fileName, code, uniforms, masks: [] };
+        };
+
+        // ── Добавить как новый слой ──
+        const addShaderFromLib = async () => {
+          if (item.fileFormat === 'sfchain') {
+            const raw = await item.fileRef.text();
+            EffectSerializer.deserializeEffect(raw);
+            switchTab('shader');
+            return;
+          }
+
+          const parsed = await parseLibFile();
+          if (!parsed) return;
+
           ShaderLayers.add({
-            name: key.replace('.txt', ''),
-            code,
-            uniforms: (uniforms || []).map(u => ({
+            name: fileName || parsed.name || 'Shader',
+            code: parsed.code,
+            uniforms: (parsed.uniforms || []).map(u => ({
               ...u, value: Array.isArray(u.value) ? [...u.value] : u.value
-            }))
+            })),
+            masks: parsed.masks || []
           });
           switchTab('shader');
         };
 
+        // ── Клик: превью ──
         fileEl.addEventListener('click', async (e) => {
           e.stopPropagation();
-          const code = await item.fileRef.text();
-          let uniforms = item.uniforms;
-          if (!Array.isArray(uniforms) || uniforms.length === 0)
-            uniforms = UniformParser.sync([], UniformParser.parse(code));
-          const ok = LibraryPreview.show(code, uniforms);
+
+          if (item.fileFormat === 'sfchain') {
+            setStatus('Chain file — right-click → Load Chain', 'info');
+            return;
+          }
+
+          const parsed = await parseLibFile();
+          if (!parsed) return;
+
+          const ok = LibraryPreview.show(parsed.code, parsed.uniforms);
           if (!ok) { setStatus('Library shader compilation failed', 'error'); return; }
           document.querySelectorAll('.lib-file.selected').forEach(el => el.classList.remove('selected'));
           fileEl.classList.add('selected');
         });
 
+        // ── Двойной клик: добавить как слой ──
         fileEl.addEventListener('dblclick', async (e) => {
           e.stopPropagation();
           await addShaderFromLib();
         });
 
+        // ── ПКМ: контекстное меню ──
         fileEl.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          LibraryContextMenu.show(fileEl, addShaderFromLib);
+
+          const fmt = item.fileFormat || SfShader.detectFormat(key);
+          const actions = [];
+
+          if (fmt === 'sfchain') {
+            // Для цепочек — Load Chain
+            actions.push({
+              label: 'Load Chain',
+              handler: async () => {
+                const raw = await item.fileRef.text();
+                EffectSerializer.deserializeEffect(raw);
+                switchTab('shader');
+              }
+            });
+          } else {
+            // Для .sfshader и .txt — Add as new layer
+            actions.push({
+              label: 'Add as new layer',
+              handler: addShaderFromLib
+            });
+          }
+
+          LibraryContextMenu.show(fileEl, actions);
         });
 
         container.appendChild(fileEl);
@@ -7021,7 +7237,6 @@ const LibraryManager = {
       rootName: this.statusLabel.innerText,
       files: []
     };
-
     for (const file of this.cachedFiles) {
       const content = await file.text();
       storageData.files.push({
@@ -7029,7 +7244,6 @@ const LibraryManager = {
         content: content
       });
     }
-
     parent.postMessage({
       pluginMessage: {
         type: 'save-library-data',
@@ -7040,15 +7254,12 @@ const LibraryManager = {
 
   restoreFromStorage(storageData) {
     if (!storageData || !storageData.files) return;
-
     this.statusLabel.innerText = storageData.rootName || "Shader Library";
-
     this.cachedFiles = storageData.files.map(f => ({
       name: f.path.split('/').pop(),
       webkitRelativePath: f.path,
       text: () => Promise.resolve(f.content)
     }));
-
     this.buildAndRenderTree();
   }
 };
@@ -7058,61 +7269,59 @@ const LibraryManager = {
    Показывает "Add as new layer" — шейдер добавляется как новый слой.
 ═══════════════════════════════════════════════════════════════════ */
 const LibraryContextMenu = (() => {
-  let el = null;
+    let el = null;
 
-  function ensureEl() {
-    if (el) return el;
-    el = document.createElement('div');
-    el.className = 'lib-context-menu';
-    el.style.display = 'none';
-    document.body.appendChild(el);
+    function ensureEl() {
+        if (el) return el;
+        el = document.createElement('div');
+        el.className = 'lib-context-menu';
+        el.style.display = 'none';
+        document.body.appendChild(el);
+        el.addEventListener('click', (e) => { e.stopPropagation(); });
+        document.addEventListener('click', () => hide());
+        document.addEventListener('contextmenu', (e) => {
+            if (!el.contains(e.target)) hide();
+        });
+        window.addEventListener('blur', () => hide());
+        return el;
+    }
 
-    el.addEventListener('click', (e) => { e.stopPropagation(); });
-    document.addEventListener('click', () => hide());
-    document.addEventListener('contextmenu', (e) => {
-      if (!el.contains(e.target)) hide();
-    });
-    window.addEventListener('blur', () => hide());
-    return el;
-  }
+    function hide() {
+        if (el) el.style.display = 'none';
+    }
 
-  function hide() {
-    if (el) el.style.display = 'none';
-  }
+    function show(anchorEl, actions) {
+        const menu = ensureEl();
+        menu.innerHTML = '';
+        menu.style.display = 'block';
 
-  function show(anchorEl, onAdd) {
-    const menu = ensureEl();
-    menu.innerHTML = '';
-    menu.style.display = 'block';
+        for (const action of actions) {
+            const item = document.createElement('button');
+            item.className = 'lib-context-menu-item';
+            item.innerText = action.label;
+            item.addEventListener('click', () => {
+                hide();
+                action.handler();
+            });
+            menu.appendChild(item);
+        }
 
-    const item = document.createElement('button');
-    item.className = 'lib-context-menu-item';
-    item.innerText = 'Add as new layer';
-    item.addEventListener('click', () => {
-      hide();
-      onAdd();
-    });
-    menu.appendChild(item);
+        const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+        menu.style.left = '0px';
+        menu.style.top = '0px';
+        const rect = menu.getBoundingClientRect();
+        const anchorRect = anchorEl.getBoundingClientRect();
+        let x = (anchorRect.right + 4) / zoom;
+        let y = anchorRect.top / zoom;
+        const ww = window.innerWidth / zoom, wh = window.innerHeight / zoom;
+        if (x + rect.width > ww) x = (anchorRect.left - 4) / zoom - rect.width;
+        if (y + rect.height > wh) y = wh - rect.height - 4;
+        if (y < 4) y = 4;
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+    }
 
-    // позиционируем справа от выделенного шейдера, с учётом границ окна
-    // и коэффициента UI Scale (zoom на <html>). position:fixed задаётся в
-    // координатах вёрстки (без zoom), поэтому делим всё на zoom.
-    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
-    menu.style.left = '0px';
-    menu.style.top = '0px';
-    const rect = menu.getBoundingClientRect();
-    const anchorRect = anchorEl.getBoundingClientRect();
-    let x = (anchorRect.right + 4) / zoom;
-    let y = anchorRect.top / zoom;
-    const ww = window.innerWidth / zoom, wh = window.innerHeight / zoom;
-    if (x + rect.width > ww) x = (anchorRect.left - 4) / zoom - rect.width;
-    if (y + rect.height > wh) y = wh - rect.height - 4;
-    if (y < 4) y = 4;
-    menu.style.left = x + 'px';
-    menu.style.top = y + 'px';
-  }
-
-  return { show, hide };
+    return { show, hide };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -7242,6 +7451,94 @@ const EffectSerializer = {
     link.click();
     URL.revokeObjectURL(url);
   }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════
+SFSHADER FORMAT — serialize / parse single shader files
+═══════════════════════════════════════════════════════════════════════ */
+const SfShader = {
+
+    // Сериализует одиночный шейдер (активный слой или код из редактора)
+    serialize(name) {
+        let code, uniforms, masks;
+
+        if (ShaderLayers.hasLayers()) {
+            ShaderLayers.saveActive();
+            const active = ShaderLayers.getActive();
+            if (active) {
+                code    = active.code;
+                uniforms = active.uniforms;
+                masks   = active.masks || [];
+            } else {
+                code    = document.getElementById('code-editor').value;
+                uniforms = S.uniforms;
+                masks   = [];
+            }
+        } else {
+            code    = document.getElementById('code-editor').value;
+            uniforms = S.uniforms;
+            masks   = [];
+        }
+
+        const u = {};
+        for (const unif of (uniforms || [])) {
+            u[unif.name] = {
+                type:  unif.type,
+                value: Array.isArray(unif.value) ? [...unif.value] : unif.value,
+                min:   unif.min !== undefined ? unif.min : null,
+                max:   unif.max !== undefined ? unif.max : null
+            };
+        }
+
+        return JSON.stringify({
+            version: 1,
+            format: 'sfshader',
+            name: name || 'Untitled Shader',
+            shaderSource: code,
+            uniforms: u,
+            masks: (masks || []).map(m => MaskModel.serialize(m)),
+            settings: {
+                resolution: S.resolution,
+                animated: S.animated
+            }
+        }, null, 2);
+    },
+
+    // Парсит содержимое .sfshader файла → { code, uniforms, masks, settings, name }
+    parse(text) {
+        const data = JSON.parse(text);
+        if (!data || data.format !== 'sfshader' || !data.shaderSource) {
+            throw new Error('Invalid .sfshader file');
+        }
+
+        const uniforms = Object.entries(data.uniforms || {}).map(([name, d]) => ({
+            name,
+            type:  d.type || 'float',
+            value: Array.isArray(d.value) ? [...d.value] : d.value,
+            min:   (d.min !== null && d.min !== undefined) ? d.min : undefined,
+            max:   (d.max !== null && d.max !== undefined) ? d.max : undefined
+        }));
+
+        const masks = (data.masks || [])
+            .map(m => MaskModel.deserialize(m))
+            .filter(Boolean);
+
+        return {
+            name:     data.name || 'Shader',
+            code:     data.shaderSource,
+            uniforms,
+            masks,
+            settings: data.settings || {}
+        };
+    },
+
+    // Определяет формат файла по расширению имени
+    detectFormat(fileName) {
+        const ext = (fileName || '').split('.').pop().toLowerCase();
+        if (ext === 'sfshader') return 'sfshader';
+        if (ext === 'sfchain')  return 'sfchain';
+        return 'txt';
+    }
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -7561,11 +7858,16 @@ const LibraryPreview = (() => {
   // ── UI Scale ──
   const BASE_W = 900, BASE_H = 620;
   const uiScaleSelect = document.getElementById('ui-scale-select');
+  let _currentUiScale = 1; // текущий масштаб
 
   function applyUiScale(scale) {
     const s = parseFloat(scale) || 1;
+    _currentUiScale = s;
     document.documentElement.style.zoom = s;
-    parent.postMessage({ pluginMessage: { type: 'resize', width: Math.round(BASE_W * s), height: Math.round(BASE_H * s) } }, '*');
+    // Обновляем текущие размеры окна с учётом масштаба
+    currentWindowW = Math.round(BASE_W * s);
+    currentWindowH = Math.round(BASE_H * s);
+    parent.postMessage({ pluginMessage: { type: 'resize', width: currentWindowW, height: currentWindowH } }, '*');
     parent.postMessage({ pluginMessage: { type: 'save-ui-scale', scale: s } }, '*');
     if (typeof resizeCanvas === 'function') resizeCanvas();
   }
@@ -7588,30 +7890,16 @@ const LibraryPreview = (() => {
   LibraryManager.init('shader-library-tree', 'library-path-status');
 
   document.getElementById('export-shader-btn').addEventListener('click', () => {
-    const currentCode = document.getElementById('code-editor').value;
     const shaderName = prompt("Enter shader name:", "MyShader") || "MyShader";
-    EffectSerializer.downloadFile(currentCode, shaderName + '.txt');
+    const jsonOutput = SfShader.serialize(shaderName);
+    EffectSerializer.downloadFile(jsonOutput, shaderName + '.sfshader');
+    setStatus('Exported as ' + shaderName + '.sfshader', 'success');
   });
 
   document.getElementById('save-effect-btn').addEventListener('click', () => {
     const effectName = prompt("Enter effect name:", "Dream Effect") || "Dream";
     const jsonOutput = EffectSerializer.serializeCurrentEffect(effectName);
     EffectSerializer.downloadFile(jsonOutput, effectName + '.sfchain');
-  });
-
-  document.getElementById('load-effect-btn').addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.sfchain';
-    input.onchange = e => {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = readerEvent => {
-        EffectSerializer.deserializeEffect(readerEvent.target.result);
-      };
-      reader.readAsText(file);
-    };
-    input.click();
   });
 
   const playBtn = document.getElementById('btn-play');
@@ -7890,7 +8178,7 @@ const LibraryPreview = (() => {
   let resizeStartW = 0, resizeStartH = 0;
 
   const MIN_W = 480, MIN_H = 360;
-  const MAX_W = 1400, MAX_H = 900;
+  const MAX_W = 2000, MAX_H = 1400; // увеличены для масштаба 200%+
 
   resizeHandle.addEventListener('mousedown', e => {
     e.preventDefault();
