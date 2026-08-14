@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\n// ── Parameters (auto-detected by Shader Flow) ─────────────────────────────\n\nuniform float uTiles;          // Масштаб сетки плиток (auto-range: 1..100)\nuniform float uWidth;          // Толщина швов / затирки (auto-range: 0..10)\nuniform float uSoftness;       // Сглаживание краев плитки (auto-range: 0..1)\nuniform float uAngle;          // Угол поворота сетки (auto-range: 0..360)\nuniform float uOpacity;        // Эффект объема / виньетка ячейки (auto-range: 0..1)\n\nuniform vec3  uGroutColor;     // Цвет швов / затирки (auto Color Picker)\n\n// ── Helper: 2D Rotation ──────────────────────────────────────────────────\nvec2 rotate2D(vec2 p, float angleDegrees) {\n    float rad = angleDegrees * 0.01745329251;\n    float s = sin(rad);\n    float c = cos(rad);\n    return vec2(p.x * c - p.y * s, p.x * s + p.y * c);\n}\n\n// ── Main shader: Mosaic Image Effect ─────────────────────────────────────\nvoid main() {\n    // 1. Нормализация UV координат и учет соотношения сторон\n    vec2 res = max(iResolution.xy, vec2(1.0));\n    vec2 uv = gl_FragCoord.xy / res;\n\n    float aspect = res.x / res.y;\n    vec2 st = uv;\n    st.x *= aspect;\n\n    // Центр вращения сетки\n    vec2 center = vec2(0.5 * aspect, 0.5);\n    st -= center;\n\n    // 2. Безопасная обработка диапазонов параметров\n    float tiles    = max(uTiles, 1.0);\n    float borderWidth = uWidth * 0.02; // Приводим [0..10] к удобному масштабу шва\n    float softness = max(uSoftness, 0.001);\n\n    // 3. Поворот координатной сетки\n    st = rotate2D(st, uAngle);\n    st += center;\n\n    // 4. Генерация ячеек сетки\n    vec2 gridPos = st * tiles;\n    vec2 tileId  = floor(gridPos); // Индекс плитки\n    vec2 tileUv  = fract(gridPos); // Локальные UV внутри плитки (0.0 .. 1.0)\n\n    // 5. Расчет центра ячейки и обратный поворот для сэмплирования исходного фото\n    vec2 tileCenterSt = (tileId + vec2(0.5)) / tiles;\n    vec2 sampleSt = tileCenterSt - center;\n    sampleSt = rotate2D(sampleSt, -uAngle); // Обратный поворот\n    sampleSt += center;\n    \n    vec2 sampleUv = sampleSt;\n    sampleUv.x /= aspect;\n    sampleUv = clamp(sampleUv, vec2(0.0), vec2(1.0));\n\n    // 6. Получение цвета: считываем uTexture, либо даем процедурный фолбэк\n    vec4 baseTexColor;\n    if (uHasTexture == 1) {\n        baseTexColor = texture2D(uTexture, sampleUv);\n    } else {\n        // Если под слоем нет текстуры — генерируем цветной градиент для наглядности\n        vec3 demoGrad = mix(vec3(0.2, 0.5, 0.8), vec3(0.9, 0.4, 0.2), sampleUv.x + sampleUv.y * 0.5);\n        baseTexColor = vec4(demoGrad, 1.0);\n    }\n\n    // 7. Расчет границ / швов (Borders)\n    vec2 distToEdge = abs(tileUv - 0.5);\n    float maxDist = max(distToEdge.x, distToEdge.y);\n\n    float halfBorder = (0.5 - borderWidth * 0.5);\n    float tileMask = smoothstep(halfBorder + softness * 0.1, halfBorder - softness * 0.1, maxDist);\n\n    // 8. Эффект объема ячейки (Bevel / Shading)\n    float edgeShade = smoothstep(0.5, 0.0, maxDist);\n    vec3 tileColor = mix(baseTexColor.rgb, baseTexColor.rgb * (0.6 + 0.4 * edgeShade), uOpacity);\n\n    // 9. Цвет швов / затирки (Фолбэк: темный гранит, если цвет еще не выбран)\n    vec3 groutCol = (length(uGroutColor) < 0.01) ? vec3(0.12, 0.12, 0.14) : uGroutColor;\n\n    // 10. Итоговое смешивание мозаики и швов\n    vec3 finalColor = mix(groutCol, tileColor, tileMask);\n\n    gl_FragColor = vec4(finalColor, baseTexColor.a);\n}",
+  "uniforms": {
+    "uTiles": {
+      "type": "float",
+      "value": 32.201,
+      "min": 1,
+      "max": 100
+    },
+    "uWidth": {
+      "type": "float",
+      "value": 1.13,
+      "min": 0,
+      "max": 10
+    },
+    "uSoftness": {
+      "type": "float",
+      "value": 0.404,
+      "min": 0,
+      "max": 1
+    },
+    "uAngle": {
+      "type": "float",
+      "value": 128.482,
+      "min": 0,
+      "max": 360
+    },
+    "uOpacity": {
+      "type": "float",
+      "value": 0.172,
+      "min": 0,
+      "max": 1
+    },
+    "uGroutColor": {
+      "type": "vec3color",
+      "value": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "min": null,
+      "max": null
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

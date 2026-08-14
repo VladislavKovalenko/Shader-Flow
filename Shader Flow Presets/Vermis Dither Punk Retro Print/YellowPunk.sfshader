@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\nuniform vec2      iResolution;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\nuniform float     uPreset;     // 0.0 .. 4.0\nuniform float     uPixelSize;  // Размер пикселя стилизации (например, 2.0 - 4.0, дефолт ~ 2.0)\n\n// ─── Оптимизированная матрица Bayer 4x4 без ветвлений ─────────\n// Использует математическую раскладку бит вместо 15x if-conditions\nfloat bayer4(vec2 p) {\n    vec2 m0 = mod(p, 2.0);\n    vec2 m1 = mod(floor(p * 0.5), 2.0);\n    return (m0.x * 2.0 + m0.y * 3.0 + m1.x * 8.0 + m1.y * 12.0) / 16.0;\n}\n\n// ─── Выбор палитры (Векторный pick5 за один проход) ────────────\n// Выбирает сразу весь vec3 (Dark или Light) вместо покомпонентного разбора\nvoid getPalette(float p, out vec3 dark, out vec3 light) {\n    // 0 = Vermis Green, 1 = Occult Orange, 2 = Crimson Black, 3 = Sepia Book, 4 = Mono\n    vec3 d0 = vec3(0.12, 0.20, 0.17); vec3 l0 = vec3(0.75, 0.88, 0.85);\n    vec3 d1 = vec3(0.17, 0.22, 0.06); vec3 l1 = vec3(0.95, 0.65, 0.25);\n    vec3 d2 = vec3(0.00, 0.00, 0.00); vec3 l2 = vec3(0.90, 0.10, 0.10);\n    vec3 d3 = vec3(0.25, 0.15, 0.05); vec3 l3 = vec3(0.80, 0.70, 0.50);\n    vec3 d4 = vec3(0.05, 0.05, 0.05); vec3 l4 = vec3(0.90, 0.90, 0.90);\n\n    // Ступенчатый интерполятор по вектору\n    dark = d0;\n    dark = mix(dark, d1, step(0.5, p));\n    dark = mix(dark, d2, step(1.5, p));\n    dark = mix(dark, d3, step(2.5, p));\n    dark = mix(dark, d4, step(3.5, p));\n\n    light = l0;\n    light = mix(light, l1, step(0.5, p));\n    light = mix(light, l2, step(1.5, p));\n    light = mix(light, l3, step(2.5, p));\n    light = mix(light, l4, step(3.5, p));\n}\n\n// ─── Быстрый псевдо-шум ──────────────────────────────────────\nfloat random(vec2 st) {\n    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // Получаем палитру за 1 вызов\n    vec3 darkColor, lightColor;\n    getPalette(uPreset, darkColor, lightColor);\n\n    if (uHasTexture == 0) {\n        // Вывод градиента палитры для предпросмотра\n        gl_FragColor = vec4(mix(darkColor, lightColor, uv.x), 1.0);\n        return;\n    }\n\n    // ── 1. Настройка сетки пикселизации (Pixel Grid) ────────────\n    float pixelScale = max(uPixelSize, 1.0);\n    vec2 coord = floor(gl_FragCoord.xy / pixelScale);\n    vec2 pixelatedUV = (coord * pixelScale + 0.5 * pixelScale) / iResolution.xy;\n\n    vec3 col = texture2D(uTexture, pixelatedUV).rgb;\n\n    // ── 2. Яркость (Luminance) и контраст ────────────────────────\n    float lum = dot(col, vec3(0.299, 0.587, 0.114));\n    lum = pow(lum, 0.85); // Гамма-коррекция для выразительности полутонов\n\n    // ── 3. Постерный Dithering с квантованием ───────────────────\n    // Bayer матрица дает порог в диапазоне [0.0 .. 1.0]\n    float dither = bayer4(coord);\n    \n    // Количество шагов градиента (4 тона для классической ретро-печати)\n    float levels = 3.0; \n    \n    // Масштабируем яркость и добавляем сдвиг матрицы\n    float ditheredLum = lum * levels + (dither - 0.5);\n    float ramp = clamp(floor(ditheredLum + 0.5) / levels, 0.0, 1.0);\n\n    // ── 4. Смешивание палитры ────────────────────────────────────\n    vec3 finalColor = mix(darkColor, lightColor, ramp);\n\n    // ── 5. Фактура бумаги и виньетка ─────────────────────────────\n    // Шум привязан к экранным пикселям, а не к сетке дизеринга (дает текстуру бумаги)\n    float paperNoise = random(gl_FragCoord.xy) * 0.06 - 0.03;\n    finalColor = clamp(finalColor + paperNoise, 0.0, 1.0);\n\n    // Мягкая аналоговая виньетка\n    vec2 center = uv - 0.5;\n    float vignette = 1.0 - dot(center, center) * 1.1;\n    finalColor *= clamp(vignette, 0.0, 1.0);\n\n    gl_FragColor = vec4(finalColor, 1.0);\n}",
+  "uniforms": {
+    "uPreset": {
+      "type": "float",
+      "value": 0.612,
+      "min": 0,
+      "max": 1
+    },
+    "uPixelSize": {
+      "type": "float",
+      "value": 3.407,
+      "min": 0,
+      "max": 10
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

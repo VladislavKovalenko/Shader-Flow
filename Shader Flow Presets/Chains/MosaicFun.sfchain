@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "name": "Dream",
+  "stages": [
+    {
+      "shaderName": "Plasma",
+      "shaderSource": "precision mediump float;\nuniform vec2  iResolution;\nuniform float iTime;\nuniform float uSpeed;\nuniform float uScale;\nuniform vec3  uColor1;\nuniform vec3  uColor2;\nuniform vec3  uColor3;\n\nvoid main() {\n  vec2 uv = (gl_FragCoord.xy / iResolution.xy) * 2.0 - 1.0;\n  uv.x *= iResolution.x / iResolution.y;\n  float t = iTime * uSpeed;\n\n  float v = sin(uv.x * uScale + t);\n  v += sin(uv.y * uScale + t);\n  v += sin((uv.x + uv.y) * uScale + t);\n  v += sin(length(uv) * uScale - t);\n  v = (v + 4.0) / 8.0;\n\n  vec3 col = mix(uColor1, uColor2, v);\n  col = mix(col, uColor3, sin(v * 3.14159) );\n  gl_FragColor = vec4(col, 1.0);\n}",
+      "uniforms": {
+        "uSpeed": {
+          "type": "float",
+          "value": 5,
+          "min": 0.1,
+          "max": 5
+        },
+        "uScale": {
+          "type": "float",
+          "value": 20,
+          "min": 0.5,
+          "max": 20
+        },
+        "uColor1": {
+          "type": "vec3color",
+          "value": [
+            1,
+            0,
+            0.5
+          ]
+        },
+        "uColor2": {
+          "type": "vec3color",
+          "value": [
+            0,
+            0.5,
+            1
+          ]
+        },
+        "uColor3": {
+          "type": "vec3color",
+          "value": [
+            0.5,
+            1,
+            0
+          ]
+        }
+      },
+      "visible": true,
+      "masks": []
+    },
+    {
+      "shaderName": "Gradient Waves",
+      "shaderSource": "precision mediump float;\nuniform vec2  iResolution;\nuniform float iTime;\nuniform float uSpeed;\nuniform float uLineCount;\nuniform float uAmplitude;\nuniform float uYOffset;\nuniform float uThickness;\nuniform vec3  uBgColor1;\nuniform vec3  uBgColor2;\nuniform vec3  uWaveColor1;\nuniform vec3  uWaveColor2;\n\nconst float MAX_LINES = 20.0;\n\nfloat wave(vec2 p, float speed, float yPos, float thickness, float softness) {\n  float y = sin(iTime * speed + p.x * 10.0) * yPos - uYOffset;\n  return 1.0 - smoothstep(thickness, thickness + softness, abs(p.y - y));\n}\n\nvoid main() {\n  vec2 res = iResolution.xy;\n  vec2 p = (gl_FragCoord.xy / res) * 2.0 - 1.0;   // -1..1, центр в середине\n  p.x *= res.x / res.y;                           // коррекция пропорций\n\n  vec4 col = vec4(mix(uBgColor1, uBgColor2, p.y * 0.5 + 0.5), 1.0);\n  float aaDy = 2.0 / res.y;\n\n  for (float i = 0.0; i < MAX_LINES; i += 1.0) {\n    if (i <= uLineCount) {\n      float t = i / max(uLineCount - 1.0, 1.0);\n      vec3 lineCol = mix(uWaveColor1, uWaveColor2, t);\n      float bokeh = pow(t, 3.0);\n      col.xyz += wave(p, uSpeed * (1.0 + t), uAmplitude, uThickness, aaDy + bokeh * 0.2)\n                 * lineCol * max(0.0, pow(1.0 - bokeh, 2.0) * 0.9);\n    }\n  }\n  gl_FragColor = col;\n}",
+      "uniforms": {
+        "uSpeed": {
+          "type": "float",
+          "value": 0.773,
+          "min": 0,
+          "max": 5
+        },
+        "uLineCount": {
+          "type": "float",
+          "value": 4.277,
+          "min": 1,
+          "max": 20
+        },
+        "uAmplitude": {
+          "type": "float",
+          "value": 0.25,
+          "min": 0,
+          "max": 0.5
+        },
+        "uYOffset": {
+          "type": "float",
+          "value": 0,
+          "min": -0.5,
+          "max": 0.5
+        },
+        "uThickness": {
+          "type": "float",
+          "value": 0.02,
+          "min": 0.002,
+          "max": 0.2
+        },
+        "uBgColor1": {
+          "type": "vec3color",
+          "value": [
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "uBgColor2": {
+          "type": "vec3color",
+          "value": [
+            0.01,
+            0.01,
+            0.02
+          ]
+        },
+        "uWaveColor1": {
+          "type": "vec3color",
+          "value": [
+            0.9,
+            0.9,
+            0.9
+          ]
+        },
+        "uWaveColor2": {
+          "type": "vec3color",
+          "value": [
+            0.3,
+            0.6,
+            1
+          ]
+        }
+      },
+      "visible": true,
+      "masks": []
+    },
+    {
+      "shaderName": "Gaussian Blur",
+      "shaderSource": "precision mediump float;\nuniform vec2  iResolution;\nuniform sampler2D uTexture;\nuniform int   uHasTexture;\nuniform float uRadius;\n\nvoid main() {\n  vec2 uv = gl_FragCoord.xy / iResolution.xy;\n  if (uHasTexture == 0) { gl_FragColor = vec4(uv, 0.5, 1.0); return; }\n\n  vec4 color = vec4(0.0);\n  float total = 0.0;\n  float r = uRadius / iResolution.x;\n\n  for(float x = -4.0; x <= 4.0; x += 1.0) {\n    for(float y = -4.0; y <= 4.0; y += 1.0) {\n      float w = exp(-(x*x+y*y)/8.0);\n      color += texture2D(uTexture, uv + vec2(x,y)*r) * w;\n      total += w;\n    }\n  }\n  gl_FragColor = color / total;\n}",
+      "uniforms": {
+        "uRadius": {
+          "type": "float",
+          "value": 14.55,
+          "min": 0,
+          "max": 20
+        }
+      },
+      "visible": true,
+      "masks": []
+    },
+    {
+      "shaderName": "Mosaic 2",
+      "shaderSource": "precision mediump float;\n\n// ── Parameters (auto-detected by Shader Flow) ─────────────────────────────\n\nuniform float uTiles;          // Масштаб сетки плиток (auto-range: 1..100)\nuniform float uWidth;          // Толщина швов / затирки (auto-range: 0..10)\nuniform float uSoftness;       // Сглаживание краев плитки (auto-range: 0..1)\nuniform float uAngle;          // Угол поворота сетки (auto-range: 0..360)\nuniform float uOpacity;        // Эффект объема / виньетка ячейки (auto-range: 0..1)\n\nuniform vec3  uGroutColor;     // Цвет швов / затирки (auto Color Picker)\n\n// ── Helper: 2D Rotation ──────────────────────────────────────────────────\nvec2 rotate2D(vec2 p, float angleDegrees) {\n    float rad = angleDegrees * 0.01745329251;\n    float s = sin(rad);\n    float c = cos(rad);\n    return vec2(p.x * c - p.y * s, p.x * s + p.y * c);\n}\n\n// ── Main shader: Mosaic Image Effect ─────────────────────────────────────\nvoid main() {\n    // 1. Нормализация UV координат и учет соотношения сторон\n    vec2 res = max(iResolution.xy, vec2(1.0));\n    vec2 uv = gl_FragCoord.xy / res;\n\n    float aspect = res.x / res.y;\n    vec2 st = uv;\n    st.x *= aspect;\n\n    // Центр вращения сетки\n    vec2 center = vec2(0.5 * aspect, 0.5);\n    st -= center;\n\n    // 2. Безопасная обработка диапазонов параметров\n    float tiles    = max(uTiles, 1.0);\n    float borderWidth = uWidth * 0.02; // Приводим [0..10] к удобному масштабу шва\n    float softness = max(uSoftness, 0.001);\n\n    // 3. Поворот координатной сетки\n    st = rotate2D(st, uAngle);\n    st += center;\n\n    // 4. Генерация ячеек сетки\n    vec2 gridPos = st * tiles;\n    vec2 tileId  = floor(gridPos); // Индекс плитки\n    vec2 tileUv  = fract(gridPos); // Локальные UV внутри плитки (0.0 .. 1.0)\n\n    // 5. Расчет центра ячейки и обратный поворот для сэмплирования исходного фото\n    vec2 tileCenterSt = (tileId + vec2(0.5)) / tiles;\n    vec2 sampleSt = tileCenterSt - center;\n    sampleSt = rotate2D(sampleSt, -uAngle); // Обратный поворот\n    sampleSt += center;\n    \n    vec2 sampleUv = sampleSt;\n    sampleUv.x /= aspect;\n    sampleUv = clamp(sampleUv, vec2(0.0), vec2(1.0));\n\n    // 6. Получение цвета: считываем uTexture, либо даем процедурный фолбэк\n    vec4 baseTexColor;\n    if (uHasTexture == 1) {\n        baseTexColor = texture2D(uTexture, sampleUv);\n    } else {\n        // Если под слоем нет текстуры — генерируем цветной градиент для наглядности\n        vec3 demoGrad = mix(vec3(0.2, 0.5, 0.8), vec3(0.9, 0.4, 0.2), sampleUv.x + sampleUv.y * 0.5);\n        baseTexColor = vec4(demoGrad, 1.0);\n    }\n\n    // 7. Расчет границ / швов (Borders)\n    vec2 distToEdge = abs(tileUv - 0.5);\n    float maxDist = max(distToEdge.x, distToEdge.y);\n\n    float halfBorder = (0.5 - borderWidth * 0.5);\n    float tileMask = smoothstep(halfBorder + softness * 0.1, halfBorder - softness * 0.1, maxDist);\n\n    // 8. Эффект объема ячейки (Bevel / Shading)\n    float edgeShade = smoothstep(0.5, 0.0, maxDist);\n    vec3 tileColor = mix(baseTexColor.rgb, baseTexColor.rgb * (0.6 + 0.4 * edgeShade), uOpacity);\n\n    // 9. Цвет швов / затирки (Фолбэк: темный гранит, если цвет еще не выбран)\n    vec3 groutCol = (length(uGroutColor) < 0.01) ? vec3(0.12, 0.12, 0.14) : uGroutColor;\n\n    // 10. Итоговое смешивание мозаики и швов\n    vec3 finalColor = mix(groutCol, tileColor, tileMask);\n\n    gl_FragColor = vec4(finalColor, baseTexColor.a);\n}",
+      "uniforms": {
+        "uTiles": {
+          "type": "float",
+          "value": 28.081,
+          "min": 1,
+          "max": 100
+        },
+        "uWidth": {
+          "type": "float",
+          "value": 1.13,
+          "min": 0,
+          "max": 10
+        },
+        "uSoftness": {
+          "type": "float",
+          "value": 0.404,
+          "min": 0,
+          "max": 1
+        },
+        "uAngle": {
+          "type": "float",
+          "value": 128.482,
+          "min": 0,
+          "max": 360
+        },
+        "uOpacity": {
+          "type": "float",
+          "value": 0.172,
+          "min": 0,
+          "max": 1
+        },
+        "uGroutColor": {
+          "type": "vec3color",
+          "value": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      },
+      "visible": true,
+      "masks": []
+    },
+    {
+      "shaderName": "Vermis Yellow",
+      "shaderSource": "precision mediump float;\n\nuniform vec2      iResolution;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\nuniform float     uPreset;\n\n// ─── Выбор одного из 5 значений по индексу ──────────────────\n// Накопленные step — единственный надёжный способ в GLSL ES 1.0\nfloat pick5(float p, float v0, float v1, float v2, float v3, float v4) {\n    float r = v0;\n    r += (v1 - v0) * step(0.5, p);\n    r += (v2 - v1) * step(1.5, p);\n    r += (v3 - v2) * step(2.5, p);\n    r += (v4 - v3) * step(3.5, p);\n    return r;\n}\n\n//  0 = Vermis Green   бумага кости + тёмно-зелёная печать\n//  1 = Occult Orange  оранжевый фон + зелёная печать\n//  2 = Crimson Black  чёрный фон + красная печать\n//  3 = Sepia Book     сепия\n//  4 = Mono           классическая монохромная\n\nvec3 paletteDark(float p) {\n    return vec3(\n        pick5(p, 0.12, 0.17, 0.00, 0.25, 0.05),\n        pick5(p, 0.20, 0.22, 0.00, 0.15, 0.05),\n        pick5(p, 0.17, 0.06, 0.00, 0.05, 0.05)\n    );\n}\n\nvec3 paletteLight(float p) {\n    return vec3(\n        pick5(p, 0.75, 0.95, 0.90, 0.80, 0.90),\n        pick5(p, 0.88, 0.65, 0.10, 0.70, 0.90),\n        pick5(p, 0.85, 0.25, 0.10, 0.50, 0.90)\n    );\n}\n\n// ─── Bayer 4×4 (оригинал из рабочей версии) ─────────────────\nfloat bayer4(vec2 p) {\n    int x     = int(mod(p.x, 4.0));\n    int y     = int(mod(p.y, 4.0));\n    int index = x + y * 4;\n\n    if (index == 0)  return 0.0  / 16.0;\n    if (index == 1)  return 8.0  / 16.0;\n    if (index == 2)  return 2.0  / 16.0;\n    if (index == 3)  return 10.0 / 16.0;\n    if (index == 4)  return 12.0 / 16.0;\n    if (index == 5)  return 4.0  / 16.0;\n    if (index == 6)  return 14.0 / 16.0;\n    if (index == 7)  return 6.0  / 16.0;\n    if (index == 8)  return 3.0  / 16.0;\n    if (index == 9)  return 11.0 / 16.0;\n    if (index == 10) return 1.0  / 16.0;\n    if (index == 11) return 9.0  / 16.0;\n    if (index == 12) return 15.0 / 16.0;\n    if (index == 13) return 7.0  / 16.0;\n    if (index == 14) return 13.0 / 16.0;\n    return 5.0 / 16.0;\n}\n\n// ─── Случайное число ─────────────────────────────────────────\nfloat random(vec2 st) {\n    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    if (uHasTexture == 0) {\n        // Показываем градиент палитры чтобы видеть что выбрано\n        vec3 d = paletteDark(uPreset);\n        vec3 l = paletteLight(uPreset);\n        gl_FragColor = vec4(mix(d, l, uv.x), 1.0);\n        return;\n    }\n\n    vec3 col = texture2D(uTexture, uv).rgb;\n\n    // ── Luminance ────────────────────────────────────────────\n    float lum = dot(col, vec3(0.299, 0.587, 0.114));\n    lum = pow(lum, 0.8);\n\n    // ── Bayer dither (оригинал) ──────────────────────────────\n    float threshold = bayer4(gl_FragCoord.xy) * 0.25 - 0.125;\n    lum = clamp(lum + threshold, 0.0, 1.0);\n\n    // ── Постеризация (оригинал) ──────────────────────────────\n    float bands = floor(lum * 4.0) / 3.0;\n\n    // ── Палитра ──────────────────────────────────────────────\n    vec3 dark  = paletteDark(uPreset);\n    vec3 light = paletteLight(uPreset);\n    vec3 color = mix(dark, light, bands);\n\n    // ── Шум бумаги (оригинал) ────────────────────────────────\n    float paperNoise = random(gl_FragCoord.xy * 0.5);\n    color += (paperNoise - 0.5) * 0.08;\n\n    // ── Виньетка (оригинал) ──────────────────────────────────\n    vec2  center  = uv - 0.5;\n    float vignette = 1.0 - dot(center, center) * 1.2;\n    color *= vignette;\n\n    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n}",
+      "uniforms": {
+        "uPreset": {
+          "type": "float",
+          "value": 0.5,
+          "min": 0,
+          "max": 1
+        }
+      },
+      "visible": true,
+      "masks": []
+    }
+  ],
+  "masterMask": [],
+  "settings": {
+    "resolution": "node",
+    "exactPreview": true,
+    "animated": true,
+    "fps": "60"
+  }
+}

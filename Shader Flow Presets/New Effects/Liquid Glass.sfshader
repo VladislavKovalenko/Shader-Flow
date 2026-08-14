@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "// ═══════════════════════════════════════════════════════════════════════════\n//   SHADER FLOW — ADVANCED LIQUID & HEAT REFRACTION\n// ═══════════════════════════════════════════════════════════════════════════\n\nprecision mediump float;\n\n// ── Uniforms ───────────────────────────────────────────────────────────────\nuniform vec2  iResolution;\nuniform float iTime;\nuniform sampler2D uTexture;\nuniform int   uHasTexture;\n\nuniform float uAmount;     // Интенсивность преломления [0.0..0.2]\nuniform float uScale;      // Плотность / масштаб волн [1.0..15.0] (дефолт ~ 6.0)\nuniform float uSpeed;      // Скорость течения [0.1..3.0] (дефолт ~ 1.0)\nuniform float uChromab;    // Хроматическая аберрация / Дисперсия [0.0..0.05]\nuniform float uHighlight;  // Интенсивность бликов на гребнях [0.0..1.0]\n\n// ── Plasma Wave Function ───────────────────────────────────────────────────\nvec2 getPlasmaDisplacement(vec2 p, float time) {\n    // Наложение синусоид под разным углом для нелинейной турбулентности\n    float w1 = sin(p.x + time) + sin(p.y + time) + sin(p.x - p.y + time);\n    float w2 = cos(p.y - time) + cos(p.x + time) + sin(p.x + p.y - time);\n    \n    // Вторая частотная октава для мелкой ряби на поверхности\n    float microX = sin(p.x * 2.5 - time * 1.5) * 0.25;\n    float microY = cos(p.y * 2.5 + time * 1.5) * 0.25;\n\n    return vec2(w1 + microX, w2 + microY);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // Безопасные дефолты для внешних параметров\n    float scale = max(uScale, 0.1);\n    float speed = max(uSpeed, 0.01);\n    float t = iTime * speed * 1.5;\n\n    // ── 1. Расчет искажения и маски краев ───────────────────────────────────\n    vec2 p = uv * scale;\n    vec2 waves = getPlasmaDisplacement(p, t);\n\n    // Плавное гашение искажения у границ экрана (чтобы не тянулись пиксели краев)\n    vec2 edgeFade = smoothstep(vec2(0.0), vec2(0.08), uv) * smoothstep(vec2(1.0), vec2(0.92), uv);\n    float edgeMask = edgeFade.x * edgeFade.y;\n\n    vec2 distortion = waves * uAmount * edgeMask;\n    vec2 distortedUV = clamp(uv + distortion, 0.001, 0.999);\n\n    // ── 2. Вывод текстуры с Chromatic Aberration & Highlighting ──────────────\n    if (uHasTexture == 1) {\n        // Хроматическая дисперсия (разнос RGB по вектору искажения)\n        float chromabOffset = uChromab * edgeMask;\n        vec2 uvR = clamp(distortedUV + distortion * chromabOffset * 15.0, 0.001, 0.999);\n        vec2 uvG = distortedUV;\n        vec2 uvB = clamp(distortedUV - distortion * chromabOffset * 15.0, 0.001, 0.999);\n\n        float r = texture2D(uTexture, uvR).r;\n        float g = texture2D(uTexture, uvG).g;\n        float b = texture2D(uTexture, uvB).b;\n        float a = texture2D(uTexture, distortedUV).a;\n\n        // Расчет объемного блика через градиент высот волны\n        vec2 delta = vec2(0.01, 0.0);\n        float hLeft  = getPlasmaDisplacement((uv - delta.xy) * scale, t).x;\n        float hRight = getPlasmaDisplacement((uv + delta.xy) * scale, t).x;\n        float hDown  = getPlasmaDisplacement((uv - delta.yx) * scale, t).y;\n        float hUp    = getPlasmaDisplacement((uv + delta.yx) * scale, t).y;\n\n        // Эмуляция нормали кривизны жидкости\n        float spec = length(vec2(hRight - hLeft, hUp - hDown));\n        spec = pow(clamp(spec * 0.25, 0.0, 1.0), 2.0) * uHighlight;\n\n        vec3 finalColor = vec3(r, g, b) + vec3(spec);\n        gl_FragColor = vec4(finalColor, a);\n\n    } else {\n        // ── 3. Процедурная плазма (Fallback без текстуры) ───────────────────\n        vec3 col1 = vec3(0.08, 0.35, 0.75); // Глубокий синий\n        vec3 col2 = vec3(0.85, 0.20, 0.55); // Пурпурный\n        vec3 col3 = vec3(0.10, 0.85, 0.70); // Бирюзовый акцент\n\n        float mask1 = (waves.x + waves.y + 4.0) / 8.0;\n        float mask2 = sin(waves.x - waves.y);\n\n        vec3 baseCol = mix(col1, col2, clamp(mask1, 0.0, 1.0));\n        vec3 finalCol = mix(baseCol, col3, clamp(mask2 * 0.5 + 0.5, 0.0, 1.0));\n\n        // Добавляем поверхностный блеск\n        float highlightMask = max(0.0, waves.x + waves.y) * 0.12 * uHighlight;\n        finalCol += vec3(highlightMask);\n\n        gl_FragColor = vec4(finalCol, 1.0);\n    }\n}",
+  "uniforms": {
+    "uAmount": {
+      "type": "float",
+      "value": 11.868,
+      "min": 1,
+      "max": 100
+    },
+    "uScale": {
+      "type": "float",
+      "value": 10,
+      "min": 1,
+      "max": 10
+    },
+    "uSpeed": {
+      "type": "float",
+      "value": 0.277,
+      "min": 0,
+      "max": 2
+    },
+    "uChromab": {
+      "type": "float",
+      "value": 0,
+      "min": 0,
+      "max": 1
+    },
+    "uHighlight": {
+      "type": "float",
+      "value": 1,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

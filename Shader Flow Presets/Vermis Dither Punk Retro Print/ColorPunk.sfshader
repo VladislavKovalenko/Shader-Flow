@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\nuniform vec2      iResolution;\nuniform sampler2D uTexture;\nuniform int       uHasTexture;\n\n// ─── Размер пиксельной сетки ─────────────────────────────────\nuniform float     uPixelSize;  // Крупность сетки (например, 2.0 - 4.0)\n\n// ─── Прямое управление цветом заливки через vec3 ─────────────\nuniform vec3      uColorDark;  // Цвет темных участков / печати (например, vec3(0.12, 0.20, 0.17))\nuniform vec3      uColorLight; // Цвет светлых участков / бумаги (например, vec3(0.75, 0.88, 0.85))\n\n// ─── Вспомогательные пресеты (Возвращают vec3 по индексу 0.0..4.0) ─────────\n// Можно использовать для быстрой инициализации uColorDark / uColorLight в коде приложения\nvec3 getPresetDark(float p) {\n    vec3 d0 = vec3(0.12, 0.20, 0.17); // 0 = Vermis Green\n    vec3 d1 = vec3(0.17, 0.22, 0.06); // 1 = Occult Orange\n    vec3 d2 = vec3(0.00, 0.00, 0.00); // 2 = Crimson Black\n    vec3 d3 = vec3(0.25, 0.15, 0.05); // 3 = Sepia Book\n    vec3 d4 = vec3(0.05, 0.05, 0.05); // 4 = Mono\n\n    vec3 r = d0;\n    r = mix(r, d1, step(0.5, p));\n    r = mix(r, d2, step(1.5, p));\n    r = mix(r, d3, step(2.5, p));\n    r = mix(r, d4, step(3.5, p));\n    return r;\n}\n\nvec3 getPresetLight(float p) {\n    vec3 l0 = vec3(0.75, 0.88, 0.85); // 0 = Vermis Green\n    vec3 l1 = vec3(0.95, 0.65, 0.25); // 1 = Occult Orange\n    vec3 l2 = vec3(0.90, 0.10, 0.10); // 2 = Crimson Black\n    vec3 l3 = vec3(0.80, 0.70, 0.50); // 3 = Sepia Book\n    vec3 l4 = vec3(0.90, 0.90, 0.90); // 4 = Mono\n\n    vec3 r = l0;\n    r = mix(r, l1, step(0.5, p));\n    r = mix(r, l2, step(1.5, p));\n    r = mix(r, l3, step(2.5, p));\n    r = mix(r, l4, step(3.5, p));\n    return r;\n}\n\n// ─── Быстрая матрица Bayer 4x4 без ветвлений ────────────────\nfloat bayer4(vec2 p) {\n    vec2 m0 = mod(p, 2.0);\n    vec2 m1 = mod(floor(p * 0.5), 2.0);\n    return (m0.x * 2.0 + m0.y * 3.0 + m1.x * 8.0 + m1.y * 12.0) / 16.0;\n}\n\n// ─── Генератор шума бумаги ──────────────────────────────────\nfloat random(vec2 st) {\n    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // Используем векторы заливки напрямую из uniform vec3\n    vec3 darkColor  = uColorDark;\n    vec3 lightColor = uColorLight;\n\n    if (uHasTexture == 0) {\n        // Вывод градиента выбранных векторов заливки для отладки\n        gl_FragColor = vec4(mix(darkColor, lightColor, uv.x), 1.0);\n        return;\n    }\n\n    // ── 1. Настройка сетки пикселизации (Pixel Grid) ────────────\n    float pixelScale = max(uPixelSize, 1.0);\n    vec2 coord = floor(gl_FragCoord.xy / pixelScale);\n    vec2 pixelatedUV = (coord * pixelScale + 0.5 * pixelScale) / iResolution.xy;\n\n    vec3 col = texture2D(uTexture, pixelatedUV).rgb;\n\n    // ── 2. Яркость и контрастность полутонов ─────────────────────\n    float lum = dot(col, vec3(0.299, 0.587, 0.114));\n    lum = pow(lum, 0.85);\n\n    // ── 3. Dithering (Bayer Matrix) ─────────────────────────────\n    float dither = bayer4(coord);\n    float levels = 3.0; \n    \n    float ditheredLum = lum * levels + (dither - 0.5);\n    float ramp = clamp(floor(ditheredLum + 0.5) / levels, 0.0, 1.0);\n\n    // ── 4. Смешивание vec3 векторов ─────────────────────────────\n    vec3 finalColor = mix(darkColor, lightColor, ramp);\n\n    // ── 5. Фактура бумаги и виньетка ─────────────────────────────\n    float paperNoise = random(gl_FragCoord.xy) * 0.06 - 0.03;\n    finalColor = clamp(finalColor + paperNoise, 0.0, 1.0);\n\n    vec2 center = uv - 0.5;\n    float vignette = 1.0 - dot(center, center) * 1.1;\n    finalColor *= clamp(vignette, 0.0, 1.0);\n\n    gl_FragColor = vec4(finalColor, 1.0);\n}",
+  "uniforms": {
+    "uPixelSize": {
+      "type": "float",
+      "value": 3.984,
+      "min": 0,
+      "max": 10
+    },
+    "uColorDark": {
+      "type": "vec3color",
+      "value": [
+        0.5696190828402368,
+        0.0711454559778183,
+        0.0711454559778183
+      ],
+      "min": null,
+      "max": null
+    },
+    "uColorLight": {
+      "type": "vec3color",
+      "value": [
+        0.12920762311646095,
+        0.525225418313193,
+        0.9509985207100592
+      ],
+      "min": null,
+      "max": null
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

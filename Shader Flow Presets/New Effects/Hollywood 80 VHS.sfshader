@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "// ═══════════════════════════════════════════════════════════════════════════\n//   SHADER FLOW — CLEAN DIGITAL GLITCH (Effect Layer)\n// ═══════════════════════════════════════════════════════════════════════════\n\nprecision mediump float;\n\n// ── Parameters (auto-detected by Shader Flow) ─────────────────────────────\nuniform float uAmount;        // Общая сила глитча [0..1]\nuniform float uBlockSize;     // Множитель размера блоков [0.1..5.0] (1.0 = дефолт)\nuniform float uSpeed;         // Частота сбоев [0..5]\nuniform float uChromab;       // Хроматическая аберрация / RGB Split [0..1]\nuniform float uScanlines;     // Интенсивность TV-строк [0..1]\n\n// ── Helpers ───────────────────────────────────────────────────────────────\nfloat hash12(vec2 p) {\n    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n}\n\nfloat hash11(float p) {\n    return fract(sin(p * 12.9898) * 43758.5453123);\n}\n\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    // Нелинейный хаотичный ритм\n    float time = iTime * max(uSpeed, 0.1);\n    float burstTime = floor(time * 15.0) + hash11(floor(time * 4.0));\n\n    // ── 1. Порог срабатывания ───────────────────────────────────────────────\n    float glitchBurst = step(1.0 - uAmount * 0.75, hash11(burstTime));\n\n    if (glitchBurst < 0.05 && uAmount < 0.98) {\n        // Микро-сдвиг для живой динамики в спокойные моменты\n        float microShift = (hash12(vec2(uv.y * 150.0, time)) - 0.5) * 0.0015 * uAmount;\n        vec2 cleanUv = clamp(uv + vec2(microShift, 0.0), 0.0, 1.0);\n        \n        if (uHasTexture == 1) {\n            gl_FragColor = texture2D(uTexture, cleanUv);\n        } else {\n            gl_FragColor = vec4(cleanUv, 0.5, 1.0);\n        }\n        return;\n    }\n\n    // ── 2. Мелкозернистые цифровые искажения с масштабированием размера ────\n    // Регулировка размера через uBlockSize (дефолт 1.0 => grid 60x120)\n    float scale = max(uBlockSize, 0.05);\n    vec2 blockGrid = vec2(60.0, 120.0) * scale;\n    vec2 blockId = floor(uv * blockGrid + floor(time * 10.0));\n    float blockNoise = hash12(blockId);\n    \n    // Атенюация: чем выше uAmount, тем больше мелких полос, но их смещение строго ограничено\n    float blockThreshold = step(0.82 - uAmount * 0.25, blockNoise) * uAmount;\n\n    // Узкие «игольчатые» линии сдвига (масштабируются соразмерно сетке)\n    float lineId = floor(uv.y * (150.0 * scale) + hash11(burstTime) * 20.0);\n    float lineNoise = hash12(vec2(lineId, burstTime));\n    float lineThreshold = step(0.7, lineNoise) * uAmount;\n\n    // Расчет аккуратного сдвига (max ~ 3-4% от ширины экрана)\n    float shiftX = 0.0;\n    shiftX += (blockNoise - 0.5) * 0.035 * blockThreshold;\n    shiftX += (lineNoise - 0.5) * 0.015 * lineThreshold;\n\n    vec2 distortedUV = clamp(vec2(uv.x + shiftX, uv.y), 0.0, 1.0);\n\n    // ── 3. Цвет и аккуратный RGB Split ────────────────────────────────────\n    vec4 finalColor = vec4(0.0);\n\n    if (uHasTexture == 1) {\n        // Контролируемый разнос каналов (без срыва картинки)\n        float splitDist = (0.008 * uAmount + 0.012 * uChromab) * (0.6 + 0.4 * hash11(burstTime));\n        \n        vec2 uvR = clamp(distortedUV + vec2(splitDist + shiftX * 0.1, 0.0), 0.0, 1.0);\n        vec2 uvG = distortedUV;\n        vec2 uvB = clamp(distortedUV - vec2(splitDist - shiftX * 0.05, 0.0), 0.0, 1.0);\n\n        float r = texture2D(uTexture, uvR).r;\n        float g = texture2D(uTexture, uvG).g;\n        float b = texture2D(uTexture, uvB).b;\n        float a = texture2D(uTexture, distortedUV).a;\n\n        // Вместо полной инверсии (пятен) — подмешиваем цифровой сдвиг каналов\n        if (blockNoise > 0.92 && blockThreshold > 0.1) {\n            float tempR = r;\n            r = g;\n            g = tempR; // Легкий Chroma Swap вместо черных/белых пятен\n        }\n\n        finalColor = vec4(r, g, b, a);\n    } else {\n        float pattern = step(0.5, sin(distortedUV.x * 40.0) * cos(distortedUV.y * 40.0));\n        vec3 col = mix(vec3(0.1, 0.05, 0.2), vec3(0.0, 0.8, 0.7), pattern);\n        finalColor = vec4(col, 1.0);\n    }\n\n    // ── 4. Тонкие Scanlines и мелкий шум ──────────────────────────────────\n    // Деликатные ТВ-строки\n    float scanline = sin(uv.y * iResolution.y * 2.0) * 0.5 + 0.5;\n    float scanlineMask = mix(1.0, 0.85 + 0.15 * scanline, uScanlines);\n    finalColor.rgb *= scanlineMask;\n\n    // Мелкий зернистый шум только на активных полосах\n    float staticNoise = (hash12(uv * iResolution.xy + time) - 0.5) * 0.06 * uAmount;\n    finalColor.rgb += vec3(staticNoise) * (blockThreshold + lineThreshold);\n\n    gl_FragColor = finalColor;\n}",
+  "uniforms": {
+    "uAmount": {
+      "type": "float",
+      "value": 1,
+      "min": 1,
+      "max": 100
+    },
+    "uBlockSize": {
+      "type": "float",
+      "value": 3.349,
+      "min": 0,
+      "max": 10
+    },
+    "uSpeed": {
+      "type": "float",
+      "value": 0,
+      "min": 0,
+      "max": 5
+    },
+    "uChromab": {
+      "type": "float",
+      "value": 1,
+      "min": 0,
+      "max": 1
+    },
+    "uScanlines": {
+      "type": "float",
+      "value": 1,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

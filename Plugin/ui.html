@@ -5278,9 +5278,128 @@ function openMaskEditor(kind, id) {
 const PRESETS = [
   // ─── GENERATE ───
   {
-    name: '🌊 Noise Field', category: 'generate',
-    code: DEFAULT_SHADER,
-    uniforms: DEFAULT_UNIFORMS
+    name: '🌊 Quantum Field', category: 'generate',
+    code: `precision mediump float;
+
+// ── Built-in Uniforms ─────────────────────────────────────────────────────
+uniform vec2  iResolution;
+uniform float iTime;
+
+// ── Parameters ────────────────────────────────────────────────────────────
+uniform float uSpeed;        // Скорость потока (0..5)
+uniform float uScale;        // Масштаб турбулентности (0.5..20)
+uniform float uFlow;         // Сила гидродинамического смещения (0..3)
+uniform float uDetail;       // Четкость каустических гребней (0..5)
+
+uniform vec3  uColorDeep;    // Бездна / Теневые слои
+uniform vec3  uColorMid;     // Основное жидкое тело
+uniform vec3  uColorBright;  // Гребни каустики
+uniform vec3  uColorAccent;  // Эмиссионные квантовые фокусы
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+    for (int i = 0; i < 4; i++) {
+        v += a * noise(p);
+        p = rot * p * 2.05 + vec2(10.0);
+        a *= 0.5;
+    }
+    return v;
+}
+
+// Вычисление каустических структур (Sharp Fluid Ridges)
+float causticsLayer(vec2 p, float t) {
+    vec2 p1 = p + vec2(t * 0.1, -t * 0.15);
+    vec2 p2 = p * 1.3 - vec2(t * 0.2, t * 0.1);
+    
+    float n1 = fbm(p1);
+    float n2 = fbm(p2);
+    
+    // Перекрестное искажение гребней
+    float c = sin((n1 + n2) * 8.0);
+    c = abs(c);
+    return pow(1.0 - c, 3.0); // Формируем острые световые нити
+}
+
+// ── Main Shader Function ──────────────────────────────────────────────────
+void main() {
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    vec2 st = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;
+
+    float t = iTime * uSpeed;
+
+    // 1. Hydrodynamic Domain Warping
+    vec2 warpUv = st * uScale;
+    
+    vec2 flow;
+    flow.x = fbm(warpUv + vec2(t * 0.15, t * 0.05));
+    flow.y = fbm(warpUv + vec2(-t * 0.1, t * 0.2));
+
+    vec2 distortedSt = st + flow * (uFlow * 0.35);
+
+    // 2. Parallax Layering (Имитация 3D-глубины слоёв)
+    // Глубокий слой (медленный, размытый)
+    vec2 layerDeep = distortedSt * uScale * 0.6 + vec2(t * 0.03);
+    float dVal = fbm(layerDeep);
+
+    // Средний слой
+    vec2 layerMid = distortedSt * uScale * 1.2 - vec2(t * 0.08, -t * 0.05);
+    float mVal = fbm(layerMid + dVal);
+
+    // Поверхностные каустики (быстрые, резкие)
+    vec2 layerTop = distortedSt * uScale * 2.0 + vec2(t * 0.12);
+    float caustics = causticsLayer(layerTop, t) * (uDetail * 0.4);
+
+    // 3. Сборка объема и светопоглощения
+    vec3 col = uColorDeep;
+
+    // Подсветка глубокого слоя
+    col = mix(col, uColorMid, smoothstep(0.2, 0.7, dVal));
+
+    // Подсветка среднего слоя с фильтрацией плотности
+    float midMask = smoothstep(0.3, 0.8, mVal);
+    col = mix(col, uColorBright, midMask * 0.7);
+
+    // Добавление резкой каустики на гребнях (Эффект толщи воды/газа)
+    col += uColorBright * caustics * midMask;
+
+    // 4. Квантовые вспышки в узлах высокой турбулентности
+    float energyNodes = pow(dVal * mVal, 2.0) * uDetail;
+    col += uColorAccent * energyNodes * 1.2;
+
+    // 5. Атмосферное затухание по краям и цветокоррекция
+    float vig = smoothstep(0.9, 0.3, length(uv - 0.5));
+    col *= vig;
+
+    // Мягкий S-образный контраст
+    col = col * col * (3.0 - 2.0 * col);
+
+    gl_FragColor = vec4(col, 1.0);
+}`,
+    uniforms: [
+        { name: 'uSpeed',      type: 'float',     value: 0.8, min: 0.1, max: 5.0 },
+        { name: 'uScale',     type: 'float',     value: 3.0, min: 0.5, max: 20.0 },
+        { name: 'uFlow',      type: 'float',     value: 1.2, min: 0.0, max: 3.0 },
+        { name: 'uDetail',    type: 'float',     value: 2.0, min: 0.0, max: 5.0 },
+        { name: 'uColorDeep',  type: 'vec3color', value: [0.02, 0.05, 0.12] },
+        { name: 'uColorMid',   type: 'vec3color', value: [0.05, 0.4, 0.65] },
+        { name: 'uColorBright',type: 'vec3color', value: [0.3, 0.85, 0.9] },
+        { name: 'uColorAccent',type: 'vec3color', value: [0.8, 0.95, 0.6] }
+    ]
   },
   {
     name: '🌈 Gradient Waves', category: 'generate',
@@ -5291,7 +5410,6 @@ uniform float uSpeed;
 uniform float uLineCount;
 uniform float uAmplitude;
 uniform float uYOffset;
-uniform float uThickness;
 uniform vec3  uBgColor1;
 uniform vec3  uBgColor2;
 uniform vec3  uWaveColor1;
@@ -5299,26 +5417,25 @@ uniform vec3  uWaveColor2;
 
 const float MAX_LINES = 20.0;
 
-float wave(vec2 p, float speed, float yPos, float thickness, float softness) {
-  float y = sin(iTime * speed + p.x * 10.0) * yPos - uYOffset;
-  return 1.0 - smoothstep(thickness, thickness + softness, abs(p.y - y));
+float wave(vec2 uv, float speed, float yPos, float thickness, float softness) {
+  float falloff = smoothstep(1.0, 0.5, abs(uv.x));
+  float y = falloff * sin(iTime * speed + uv.x * 10.0) * yPos - uYOffset;
+  return 1.0 - smoothstep(thickness, thickness + softness, abs(uv.y - y));
 }
 
 void main() {
-  vec2 res = iResolution.xy;
-  vec2 p = (gl_FragCoord.xy / res) * 2.0 - 1.0;   // -1..1, центр в середине
-  p.x *= res.x / res.y;                           // коррекция пропорций
-
-  vec4 col = vec4(mix(uBgColor1, uBgColor2, p.y * 0.5 + 0.5), 1.0);
-  float aaDy = 2.0 / res.y;
+  vec2 uv = gl_FragCoord.xy / iResolution.y;
+  vec4 col = vec4(mix(uBgColor1, uBgColor2, uv.x + uv.y), 1.0);
+  vec2 uvw = uv - 0.5;
+  float aaDy = 1.0 / iResolution.y;
 
   for (float i = 0.0; i < MAX_LINES; i += 1.0) {
     if (i <= uLineCount) {
       float t = i / max(uLineCount - 1.0, 1.0);
       vec3 lineCol = mix(uWaveColor1, uWaveColor2, t);
       float bokeh = pow(t, 3.0);
-      col.xyz += wave(p, uSpeed * (1.0 + t), uAmplitude, uThickness, aaDy + bokeh * 0.2)
-                 * lineCol * max(0.0, pow(1.0 - bokeh, 2.0) * 0.9);
+      col.xyz += wave(uvw, uSpeed*(1.0+t), uAmplitude, 0.003, aaDy + bokeh*0.2)
+                 * lineCol * max(0.0, pow(1.0-bokeh,2.0)*0.9);
     }
   }
   gl_FragColor = col;
@@ -5328,7 +5445,6 @@ void main() {
       { name:'uLineCount',  type:'float',     value:10.0, min:1.0,  max:20.0 },
       { name:'uAmplitude',  type:'float',     value:0.2,  min:0.0,  max:0.5  },
       { name:'uYOffset',    type:'float',     value:0.0,  min:-0.5, max:0.5  },
-      { name:'uThickness',  type:'float',     value:0.02, min:0.002, max:0.2 },
       { name:'uBgColor1',   type:'vec3color', value:[0.1, 0.1, 0.1] },
       { name:'uBgColor2',   type:'vec3color', value:[0.01,0.01,0.02]},
       { name:'uWaveColor1', type:'vec3color', value:[0.9, 0.9, 0.9] },
@@ -5338,83 +5454,297 @@ void main() {
   {
     name: '🔥 Fire', category: 'generate',
     code: `precision mediump float;
+
+// ── Built-in Uniforms ─────────────────────────────────────────────────────
 uniform vec2  iResolution;
 uniform float iTime;
-uniform float uSpeed;
-uniform float uIntensity;
-uniform vec3  uColorA;
-uniform vec3  uColorB;
-uniform vec3  uColorC;
 
-float hash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+// ── Parameters (auto-detected range conventions) ──────────────────────────
+uniform float uSpeed;       // Скорость горения (0..5)
+uniform float uIntensity;   // Интенсивность / высота пламени (0..5)
+uniform float uTurbulence;  // Завихрения и деформация (0..2)
+uniform float uCount;       // Плотность и количество искр (1..100)
+
+uniform vec3  uColorDark;   // Тёмно-красный/дымный внешний контур
+uniform vec3  uColorMid;    // Оранжевое тело пламени
+uniform vec3  uColorBright; // Ярко-желтый внутренний слой
+uniform vec3  uColorCore;   // Белое горячее основание / ядро
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
 float noise(vec2 p) {
-  vec2 i=floor(p), f=fract(p);
-  f=f*f*(3.0-2.0*f);
-  return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
+
+// Fractal Brownian Motion для детализации пламени
 float fbm(vec2 p) {
-  float v=0.0,a=0.5;
-  for(int i=0;i<5;i++){v+=a*noise(p);p*=2.0;a*=0.5;}
-  return v;
+    float v = 0.0;
+    float a = 0.5;
+    vec2 shift = vec2(100.0);
+    // Матрица поворота для разрушения сеточной структуры шума
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p = rot * p * 2.0 + shift;
+        a *= 0.5;
+    }
+    return v;
 }
 
+// ── Main Shader Function ──────────────────────────────────────────────────
 void main() {
-  vec2 uv = gl_FragCoord.xy / iResolution.xy;
-  uv.y = 1.0 - uv.y;
-  float t = iTime * uSpeed;
-  vec2 q = uv;
-  q.y += t * 0.4;
-  float f = fbm(q * 3.0);
-  f += 0.5 * fbm(q * 6.0 + vec2(t*0.2, t*0.3));
-  float edge = 1.0 - uv.y;
-  f *= edge * edge * uIntensity;
-  f = clamp(f, 0.0, 1.0);
+    // 1. Координаты UV (0.0 внизу, 1.0 вверху)
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    vec2 st = uv;
+    st.x *= iResolution.x / iResolution.y;
 
-  vec3 col = mix(vec3(0.0), uColorA, f);
-  col = mix(col, uColorB, f*f);
-  col = mix(col, uColorC, f*f*f);
-  gl_FragColor = vec4(col, 1.0);
+    float t = iTime * uSpeed;
+
+    // 2. Domain Warping (Конвекция и завихрения)
+    // Искажаем UV перед генерацией формы, создавая эффект поддающего снизу жара
+    vec2 warpUv = st * vec2(2.0, 1.5);
+    
+    // Сдвиг по оси Y идет быстрее, по X — медленнее (эффект тяги вверх)
+    vec2 q = vec2(0.0);
+    q.x = fbm(warpUv + vec2(0.0, t * 0.4));
+    q.y = fbm(warpUv + vec2(t * 0.3, t * 0.7));
+
+    vec2 r = vec2(0.0);
+    r.x = fbm(warpUv + 1.0 * q + vec2(1.7, 9.2) + 0.15 * t);
+    r.y = fbm(warpUv + 1.0 * q + vec2(8.3, 2.8) + 0.50 * t);
+
+    // Сила искажения регулируется uTurbulence
+    vec2 distortedSt = st + r * (uTurbulence * 0.4);
+
+    // 3. Форма стены огня
+    // Базовое затухание снизу вверх по всей ширине экрана
+    float verticalFade = pow(max(1.0 - uv.y, 0.0), 1.2);
+    
+    // Генерируем языки пламени
+    vec2 flameCoord = distortedSt * vec2(2.5, 1.2) - vec2(0.0, t * 1.2);
+    float flameNoise = fbm(flameCoord);
+
+    // Объединяем вертикальный градиент с шумом для рваного верхнего края
+    float fire = verticalFade * (flameNoise * 1.8);
+    fire *= uIntensity;
+
+    // 4. Огненное ядро у основания стены (горячая нижняя кромка)
+    float baseCore = smoothstep(0.35, 0.0, uv.y);
+    baseCore *= (0.8 + 0.4 * noise(vec2(st.x * 10.0, t * 2.0))); // Легкое мерцание основания
+
+    // 5. Цветовая градация (Стена огня)
+    vec3 col = uColorDark;
+
+    // Медленный переход от темного края к яркому телу пламени
+    float step1 = smoothstep(0.1, 0.35, fire);
+    float step2 = smoothstep(0.35, 0.65, fire);
+    float step3 = smoothstep(0.65, 0.95, fire);
+
+    col = mix(col, uColorMid, step1);
+    col = mix(col, uColorBright, step2);
+    col = mix(col, uColorCore, step3 + baseCore * 0.6);
+
+    // 6. Реалистичные искры / Угли (Ember particle system)
+    if (uCount > 0.0) {
+        // Делим пространство на ячейки для генерации точечных искр
+        vec2 emberUv = st * vec2(15.0, 8.0);
+        
+        // Частицы ускоряются вверх и виляют по X
+        emberUv.y -= t * 2.5;
+        emberUv.x += sin(emberUv.y * 2.0 + t) * 0.3;
+
+        vec2 emberId = floor(emberUv);
+        vec2 emberFrag = fract(emberUv);
+
+        // Случайное смещение искры внутри ячейки
+        vec2 p = vec2(hash(emberId), hash(emberId + 42.1));
+        float dist = length(emberFrag - p);
+
+        // Частицы вспыхивают и гаснут по мере подъема
+        float spark = smoothstep(0.08, 0.0, dist);
+        
+        // Искры появляются ближе к основанию и затухают к верху
+        float sparkLife = smoothstep(0.1, 0.9, 1.0 - uv.y) * smoothstep(0.0, 0.2, uv.y);
+        float sparkDensity = step(1.0 - (uCount * 0.008), hash(emberId * 1.3));
+
+        float finalSparks = spark * sparkLife * sparkDensity;
+        
+        // Аддитивное свечение искр (бело-желтые горячие точки)
+        col += mix(uColorBright, uColorCore, hash(emberId)) * finalSparks * 3.0;
+    }
+
+    // 7. Горячее свечение (Glow) над стеной огня
+    float topGlow = exp(-uv.y * 2.5) * 0.3 * uIntensity;
+    col += uColorMid * topGlow;
+
+    // Коррекция диапазона
+    col = clamp(col, 0.0, 1.0);
+
+    gl_FragColor = vec4(col, 1.0);
 }`,
     uniforms: [
-      { name:'uSpeed',     type:'float',     value:1.0,  min:0.1, max:5.0 },
-      { name:'uIntensity', type:'float',     value:2.0,  min:0.5, max:4.0 },
-      { name:'uColorA',    type:'vec3color', value:[0.8, 0.1, 0.0] },
-      { name:'uColorB',    type:'vec3color', value:[1.0, 0.6, 0.0] },
-      { name:'uColorC',    type:'vec3color', value:[1.0, 1.0, 0.8] },
+        { name: 'uSpeed',      type: 'float',     value: 1.2, min: 0.1, max: 5.0 },
+        { name: 'uIntensity',  type: 'float',     value: 1.6, min: 0.5, max: 3.0 },
+        { name: 'uTurbulence', type: 'float',     value: 0.9, min: 0.0, max: 2.0 },
+        { name: 'uCount',      type: 'float',     value: 40.0, min: 0.0, max: 100.0 },
+        { name: 'uColorDark',  type: 'vec3color', value: [0.25, 0.03, 0.0] },
+        { name: 'uColorMid',   type: 'vec3color', value: [0.95, 0.25, 0.02] },
+        { name: 'uColorBright',type: 'vec3color', value: [1.0, 0.65, 0.1] },
+        { name: 'uColorCore',  type: 'vec3color', value: [1.0, 0.98, 0.85] }
     ]
   },
   {
-    name: '🟣 Plasma', category: 'generate',
+    name: '🟣 Plasma Storm', category: 'generate',
     code: `precision mediump float;
+
+// ── Built-in Uniforms ─────────────────────────────────────────────────────
 uniform vec2  iResolution;
 uniform float iTime;
-uniform float uSpeed;
-uniform float uScale;
-uniform vec3  uColor1;
-uniform vec3  uColor2;
-uniform vec3  uColor3;
 
+// ── Parameters ────────────────────────────────────────────────────────────
+uniform float uSpeed;        // Скорость разрядов (0..5)
+uniform float uScale;        // Масштаб энергетической сетки (0.5..20)
+uniform float uComplexity;   // Турбулентность макро-полей (0..3)
+uniform float uGlow;         // Интенсивность электрического свечения (0..3)
+
+uniform vec3  uColorA;       // Тёмный фон / внешняя аура
+uniform vec3  uColorB;       // Основная плазменная дуга
+uniform vec3  uColorC;       // Высокоэнергетические филаменты
+uniform vec3  uColorGlow;    // Белое горячее ядро разряда
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+vec2 hash2(vec2 p) {
+    return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453123);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p = rot * p * 2.1 + vec2(100.0);
+        a *= 0.5;
+    }
+    return v;
+}
+
+// Электрические филаменты на основе Voronoi
+float voronoiFilaments(vec2 p, float t) {
+    vec2 n = floor(p);
+    vec2 f = fract(p);
+    float minDist = 1.0;
+    float secondMinDist = 1.0;
+
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = hash2(n + g);
+            // Виляние узлов энергии во времени
+            o = 0.5 + 0.5 * sin(t * 2.0 + 6.2831 * o);
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+
+            if (d < minDist) {
+                secondMinDist = minDist;
+                minDist = d;
+            } else if (d < secondMinDist) {
+                secondMinDist = d;
+            }
+        }
+    }
+    // Градиент между первыми двумя соседними узлами создает острую молнию/нить
+    return sqrt(secondMinDist) - sqrt(minDist);
+}
+
+// ── Main Shader Function ──────────────────────────────────────────────────
 void main() {
-  vec2 uv = (gl_FragCoord.xy / iResolution.xy) * 2.0 - 1.0;
-  uv.x *= iResolution.x / iResolution.y;
-  float t = iTime * uSpeed;
+    vec2 uv = gl_FragCoord.xy / iResolution.xy;
+    vec2 st = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;
 
-  float v = sin(uv.x * uScale + t);
-  v += sin(uv.y * uScale + t);
-  v += sin((uv.x + uv.y) * uScale + t);
-  v += sin(length(uv) * uScale - t);
-  v = (v + 4.0) / 8.0;
+    float t = iTime * uSpeed;
 
-  vec3 col = mix(uColor1, uColor2, v);
-  col = mix(col, uColor3, sin(v * 3.14159) );
-  gl_FragColor = vec4(col, 1.0);
+    // 1. Полярное/спиральное искажение пространства (Скручивание плазмы)
+    float r = length(st);
+    float angle = atan(st.y, st.x);
+    vec2 polarSt = vec2(angle * 0.3183, r);
+
+    // 2. Двунаправленный Domain Warping
+    vec2 q = vec2(
+        fbm(st * uScale + vec2(0.0, t * 0.2)),
+        fbm(st * uScale + vec2(t * 0.3, 0.0))
+    );
+
+    vec2 dWarp = vec2(
+        fbm(st * uScale + 3.0 * q + vec2(1.7, 9.2) + t * 0.15),
+        fbm(st * uScale + 3.0 * q + vec2(8.3, 2.8) + t * 0.2)
+    );
+
+    vec2 pCoord = st * uScale + dWarp * uComplexity;
+
+    // 3. Генерация электрических нитей (Voronoi arcs)
+    float arcs = voronoiFilaments(pCoord * 1.5, t);
+    float lightning = pow(clamp(1.0 - arcs, 0.0, 1.0), 8.0); // Делаем линии тонкими и яркими
+
+    // 4. Плазменное поле (Volumetric Plasma Waves)
+    float wave1 = sin(pCoord.x * 2.0 + t);
+    float wave2 = cos(pCoord.y * 2.0 - t * 1.3);
+    float wave3 = sin((pCoord.x + pCoord.y) * 1.5 + t * 0.8);
+    float fieldDensity = (wave1 + wave2 + wave3) * 0.33 + fbm(pCoord * 2.0 + t * 0.5) * 0.5;
+    fieldDensity = smoothstep(-0.2, 0.8, fieldDensity);
+
+    // 5. Компоновка цвета и энергии
+    vec3 col = mix(uColorA, uColorB, fieldDensity);
+    
+    // Вплетаем электрические разряды
+    col = mix(col, uColorC, lightning * 0.8);
+
+    // 6. Горячие узлы и центральное ядро разрядов (Glow & Overexposure)
+    float energyCore = pow(fieldDensity * lightning, 0.5) * uGlow;
+    col += uColorGlow * energyCore * 2.5;
+
+    // Всплески свечения на перегибах волн
+    float glowMask = smoothstep(0.4, 0.9, fieldDensity * (1.0 + lightning));
+    col += uColorB * glowMask * uGlow * 0.8;
+
+    // 7. Виньетирование и кинематографический контраст
+    float vig = smoothstep(0.8, 0.2, length(uv - 0.5));
+    col *= vig;
+
+    // Коррекция тонового диапазона (HDR tonemapping)
+    col = col / (1.0 + col * 0.2);
+    col = pow(clamp(col, 0.0, 1.0), vec3(0.9));
+
+    gl_FragColor = vec4(col, 1.0);
 }`,
     uniforms: [
-      { name:'uSpeed',  type:'float',     value:1.0,  min:0.1, max:5.0  },
-      { name:'uScale',  type:'float',     value:4.0,  min:0.5, max:20.0 },
-      { name:'uColor1', type:'vec3color', value:[1.0, 0.0, 0.5] },
-      { name:'uColor2', type:'vec3color', value:[0.0, 0.5, 1.0] },
-      { name:'uColor3', type:'vec3color', value:[0.5, 1.0, 0.0] },
+        { name: 'uSpeed',      type: 'float',     value: 1.0, min: 0.1, max: 5.0 },
+        { name: 'uScale',     type: 'float',     value: 3.5, min: 0.5, max: 20.0 },
+        { name: 'uComplexity',type: 'float',     value: 1.5, min: 0.0, max: 3.0 },
+        { name: 'uGlow',       type: 'float',     value: 1.2, min: 0.0, max: 3.0 },
+        { name: 'uColorA',     type: 'vec3color', value: [0.08, 0.02, 0.18] },
+        { name: 'uColorB',     type: 'vec3color', value: [0.65, 0.08, 0.95] },
+        { name: 'uColorC',     type: 'vec3color', value: [0.0, 0.85, 0.95] },
+        { name: 'uColorGlow',  type: 'vec3color', value: [0.95, 0.98, 1.0] }
     ]
   },
 
