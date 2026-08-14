@@ -1580,6 +1580,304 @@ function tessellateFreeform(pts, steps, curv) {
   return out;
 }
 
+/* =============================================================
+   FREE FORM BEZIER ANCHORS
+   ============================================================= */
+
+const FREE_MAX_SHADER_POINTS = 127;
+const FREE_MAX_PREVIEW_POINTS = 512;
+
+function _normalizeFreeAnchor(a) {
+  const hIn = a.hIn || {};
+  const hOut = a.hOut || {};
+
+  return {
+    x: a.x || 0,
+    y: a.y || 0,
+    mode: a.mode === 'smooth' ? 'smooth' : 'corner',
+    hIn: {
+      x: hIn.x || 0,
+      y: hIn.y || 0
+    },
+    hOut: {
+      x: hOut.x || 0,
+      y: hOut.y || 0
+    }
+  };
+}
+
+function cubicBezierPoint(p0, p1, p2, p3, t) {
+  const it = 1 - t;
+  const it2 = it * it;
+  const t2 = t * t;
+
+  return {
+    x:
+      it2 * it * p0.x +
+      3 * it2 * t * p1.x +
+      3 * it * t2 * p2.x +
+      t2 * t * p3.x,
+    y:
+      it2 * it * p0.y +
+      3 * it2 * t * p1.y +
+      3 * it * t2 * p2.y +
+      t2 * t * p3.y
+  };
+}
+
+function ensureFreeformAnchors(m) {
+  if (!m) return [];
+
+  if (Array.isArray(m.anchors) && m.anchors.length > 0) {
+    for (let i = 0; i < m.anchors.length; i++) {
+      const a = m.anchors[i];
+
+      if (!a.hIn) a.hIn = { x: 0, y: 0 };
+      if (!a.hOut) a.hOut = { x: 0, y: 0 };
+      if (a.mode !== 'smooth') a.mode = 'corner';
+
+      a.hIn.x = a.hIn.x || 0;
+      a.hIn.y = a.hIn.y || 0;
+      a.hOut.x = a.hOut.x || 0;
+      a.hOut.y = a.hOut.y || 0;
+    }
+
+    return m.anchors;
+  }
+
+  const pts = Array.isArray(m.pts) ? m.pts : [];
+
+  const anchors = pts.map(p =>
+    _normalizeFreeAnchor({
+      x: p.x,
+      y: p.y,
+      mode: 'corner',
+      hIn: { x: 0, y: 0 },
+      hOut: { x: 0, y: 0 }
+    })
+  );
+
+  const n = anchors.length;
+
+  const curved =
+    m.smooth ||
+    (Array.isArray(m.curv) && m.curv.some(c => c != null && Math.abs(c) > 0.001));
+
+  if (curved && n >= 3) {
+    for (let i = 0; i < n; i++) {
+      const prev = anchors[(i - 1 + n) % n];
+      const cur = anchors[i];
+      const next = anchors[(i + 1) % n];
+
+      let tx = next.x - prev.x;
+      let ty = next.y - prev.y;
+
+      const len = Math.hypot(tx, ty);
+
+      if (len > 1e-6) {
+        tx /= len;
+        ty /= len;
+      } else {
+        tx = 1;
+        ty = 0;
+      }
+
+      const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y) * 0.25;
+      const outLen = Math.hypot(next.x - cur.x, next.y - cur.y) * 0.25;
+
+      cur.mode = 'smooth';
+      cur.hIn = { x: -tx * inLen, y: -ty * inLen };
+      cur.hOut = { x: tx * outLen, y: ty * outLen };
+    }
+  }
+
+  m.anchors = anchors;
+  return m.anchors;
+}
+
+function freeAnchorPositions(m) {
+  return ensureFreeformAnchors(m).map(a => ({ x: a.x, y: a.y }));
+}
+
+function freeSegmentHasCurve(a, b) {
+  const hasOut =
+    a.hOut &&
+    (Math.abs(a.hOut.x) > 1e-6 || Math.abs(a.hOut.y) > 1e-6);
+
+  const hasIn =
+    b.hIn &&
+    (Math.abs(b.hIn.x) > 1e-6 || Math.abs(b.hIn.y) > 1e-6);
+
+  return !!(hasOut || hasIn);
+}
+
+function flattenFreeformMask(m, maxPoints = FREE_MAX_SHADER_POINTS) {
+  const anchors = ensureFreeformAnchors(m);
+  const n = anchors.length;
+
+  if (n === 0) return [];
+  if (n < 3) return anchors.map(a => ({ x: a.x, y: a.y }));
+
+  let curveCount = 0;
+
+  for (let i = 0; i < n; i++) {
+    const a = anchors[i];
+    const b = anchors[(i + 1) % n];
+
+    if (freeSegmentHasCurve(a, b)) curveCount++;
+  }
+
+  let subdiv = 12;
+
+  if (curveCount > 0) {
+    const available = Math.max(0, maxPoints - n);
+    const per = Math.floor(available / curveCount);
+    subdiv = Math.max(2, Math.min(24, per + 1));
+  }
+
+  const out = [];
+
+  for (let i = 0; i < n; i++) {
+    const a = anchors[i];
+    const b = anchors[(i + 1) % n];
+
+    out.push({ x: a.x, y: a.y });
+
+    if (freeSegmentHasCurve(a, b)) {
+      const p0 = { x: a.x, y: a.y };
+      const p1 = { x: a.x + a.hOut.x, y: a.y + a.hOut.y };
+      const p2 = { x: b.x + b.hIn.x, y: b.y + b.hIn.y };
+      const p3 = { x: b.x, y: b.y };
+
+      for (let s = 1; s < subdiv; s++) {
+        const t = s / subdiv;
+        const p = cubicBezierPoint(p0, p1, p2, p3, t);
+        out.push({ x: p.x, y: p.y });
+      }
+    }
+  }
+
+  if (out.length > maxPoints) {
+    const decimated = [];
+    const step = out.length / maxPoints;
+
+    for (let i = 0; i < maxPoints; i++) {
+      const idx = Math.min(out.length - 1, Math.floor(i * step));
+      decimated.push(out[idx]);
+    }
+
+    return decimated;
+  }
+
+  return out;
+}
+
+function makeFreeAnchorSmooth(m, i) {
+  const anchors = ensureFreeformAnchors(m);
+  const n = anchors.length;
+  const a = anchors[i];
+
+  if (!a || n < 3) return;
+
+  const outLen = Math.hypot(a.hOut.x, a.hOut.y);
+  const inLen = Math.hypot(a.hIn.x, a.hIn.y);
+
+  if (outLen > 1e-6) {
+    const scale = inLen > 1e-6 ? inLen / outLen : 1;
+
+    a.hIn = {
+      x: -a.hOut.x * scale,
+      y: -a.hOut.y * scale
+    };
+  } else if (inLen > 1e-6) {
+    const scale = outLen > 1e-6 ? outLen / inLen : 1;
+
+    a.hOut = {
+      x: -a.hIn.x * scale,
+      y: -a.hIn.y * scale
+    };
+  } else {
+    const prev = anchors[(i - 1 + n) % n];
+    const next = anchors[(i + 1) % n];
+
+    let tx = next.x - prev.x;
+    let ty = next.y - prev.y;
+
+    const len = Math.hypot(tx, ty);
+
+    if (len > 1e-6) {
+      tx /= len;
+      ty /= len;
+    } else {
+      tx = 1;
+      ty = 0;
+    }
+
+    const autoInLen = Math.hypot(a.x - prev.x, a.y - prev.y) * 0.25;
+    const autoOutLen = Math.hypot(next.x - a.x, next.y - a.y) * 0.25;
+
+    a.hIn = { x: -tx * autoInLen, y: -ty * autoInLen };
+    a.hOut = { x: tx * autoOutLen, y: ty * autoOutLen };
+  }
+
+  a.mode = 'smooth';
+}
+
+function toggleFreeAnchorMode(m, i) {
+  const anchors = ensureFreeformAnchors(m);
+  const a = anchors[i];
+
+  if (!a) return;
+
+  if (a.mode === 'smooth') {
+    a.mode = 'corner';
+  } else {
+    makeFreeAnchorSmooth(m, i);
+  }
+}
+
+function resetFreeAnchorHandles(m, i) {
+  const anchors = ensureFreeformAnchors(m);
+  const a = anchors[i];
+
+  if (!a) return;
+
+  a.hIn = { x: 0, y: 0 };
+  a.hOut = { x: 0, y: 0 };
+}
+
+function setFreeAnchorHandle(m, i, which, dx, dy, altKey) {
+  const anchors = ensureFreeformAnchors(m);
+  const a = anchors[i];
+
+  if (!a) return;
+
+  a[which] = { x: dx, y: dy };
+
+  if (altKey) {
+    a.mode = 'corner';
+    return;
+  }
+
+  if (a.mode === 'smooth') {
+    const other = which === 'hOut' ? 'hIn' : 'hOut';
+
+    const len = Math.hypot(dx, dy);
+    const otherLen = Math.hypot(a[other].x, a[other].y);
+
+    if (len > 1e-6) {
+      const scale = otherLen > 1e-6 ? otherLen / len : 1;
+
+      a[other] = {
+        x: -dx * scale,
+        y: -dy * scale
+      };
+    } else {
+      a[other] = { x: 0, y: 0 };
+    }
+  }
+}
+
 const GL = (() => {
   let gl = null;
   let program = null;
@@ -1896,7 +2194,7 @@ uniform int uHasTexture;
       uniform int   uNoiseType;  // 0..5
       uniform float uUneven;     // 0..1 — неровности края
       uniform int   uUnevenType; // 0 = Soft, 1 = Sharp
-      uniform vec2  uFreePts[64]; // Free Form вершины (последняя = первая для замыкания)
+      uniform vec2  uFreePts[128]; // Free Form вершины спрямлённой Безье-кривой (последняя = первая для замыкания)
       uniform int   uFreeCount;   // кол-во реальных вершин
 
       float sdCircle(vec2 p, float r){ return length(p) - r; }
@@ -1938,7 +2236,7 @@ uniform int uHasTexture;
       float sdFree(vec2 p){
         float d2 = 1e9;
         bool inside = false;
-        for (int i = 0; i < 63; i++) {
+        for (int i = 0; i < 127; i++) {
           if (i >= uFreeCount) break;
           vec2 a = uFreePts[i];
           vec2 b = uFreePts[i + 1];
@@ -2151,18 +2449,15 @@ uniform int uHasTexture;
       gl.uniform1i(gl.getUniformLocation(_maskProg, 'uNoiseType'), nIdx);
       gl.uniform1f(gl.getUniformLocation(_maskProg, 'uUneven'), m.uneven || 0.0);
       gl.uniform1i(gl.getUniformLocation(_maskProg, 'uUnevenType'), m.unevenType === 'sharp' ? 1 : 0);
-      // Free Form точки (последняя = первая для замыкания). Для сглаженной
-      // кривой — триангулируем Catmull-Rom в плотный полигон (шейдер рисует
-      // полигон, поэтому кривая получается аппроксимацией из множества рёбер).
-       let fpts = m.pts || [];
-       const curved = m.smooth || (m.curv && m.curv.some(c => c != null && Math.abs(c) > 0.001));
-       if (curved && fpts.length >= 3) fpts = tessellateFreeform(fpts, 12, m.curv);
-      const count = Math.max(0, Math.min(fpts.length, 63));
+      // Free Form: спрямляем Безье-кривую (по anchors) в плотный полигон —
+      // шейдер рисует полигон, поэтому кривая получается аппроксимацией рёбер.
+       let fpts = flattenFreeformMask(m, FREE_MAX_SHADER_POINTS);
+      const count = Math.max(0, Math.min(fpts.length, FREE_MAX_SHADER_POINTS));
       const fp = [];
       for (let i = 0; i < count; i++) fp.push(fpts[i].x, fpts[i].y);
       if (count > 0) fp.push(fpts[0].x, fpts[0].y);   // замыкание
       // всегда передаём полный вектор (иначе установится мусор из прошлого кадра)
-      while (fp.length < 128) fp.push(0, 0);
+      while (fp.length < 256) fp.push(0, 0);
       gl.uniform2fv(gl.getUniformLocation(_maskProg, 'uFreePts'), new Float32Array(fp));
       gl.uniform1i(gl.getUniformLocation(_maskProg, 'uFreeCount'), count);
       const posLoc = gl.getAttribLocation(_maskProg, 'aPos');
@@ -3209,6 +3504,9 @@ const MaskEditor = (() => {
   let overlay = null, panel = null;
   let curKind = null, curLayer = null, selectedId = null;
   let editingId = null;
+  let selectedAnchor = -1;
+  let dragAnchor = -1;
+  let dragHandleType = null;
   let previewCvs = null, previewTimer = null;
   let pvSx = 1, pvSy = 1, pvAspect = 1, pvScale = 1;   // геометрия превью (для drag-хиттестов)
   let maskCodeVisible = false, maskCodeTimer = null;
@@ -3251,6 +3549,7 @@ const MaskEditor = (() => {
     if (!curLayer) return;
     if (!curLayer.masks) curLayer.masks = [];
     selectedId = curLayer.masks.length ? curLayer.masks[curLayer.masks.length - 1].id : null;
+    selectedAnchor = -1;
     buildOverlay();
     renderList();
     renderParams();
@@ -3306,7 +3605,7 @@ const MaskEditor = (() => {
           <div class="mask-preview-wrap">
             <canvas class="mask-preview-canvas"></canvas>
           </div>
-          <div class="mask-preview-hint" data-tip="Interaction guide for the Mask Stack Preview canvas">Selected mask shows a Bounding Box: drag inside to move, drag 8 handles to scale, drag the top rotation handle to rotate · Free Form: LMB on empty area = add point between nearest points, drag a yellow dot = move it, double-click a dot = delete it, RMB-drag a segment up/down = bend its curvature (Smooth makes all segments curved)</div>
+          <div class="mask-preview-hint" data-tip="Interaction guide for the Mask Stack Preview canvas">Selected mask shows a Bounding Box: drag inside to move, drag 8 handles to scale, drag the top rotation handle to rotate · Free Form Bezier: drag anchor = move, drag green/blue handles = bend, click segment = add anchor, right-click anchor = delete, double-click anchor = Smooth/Corner, Alt + double-click = delete, Alt + drag handle = independent handles, Ctrl/Cmd + click handle = reset handle</div>
         </div>
       </div>
     `;
@@ -3392,17 +3691,34 @@ const MaskEditor = (() => {
 
   function onPreviewDblClick(e) {
     const m = (curLayer.masks || []).find(x => x.id === selectedId);
+
     if (!m || m.type !== 'freeform') return;
+
     const r = previewCvs.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width * previewCvs.width;
     const py = (e.clientY - r.top) / r.height * previewCvs.height;
+
+    const anchors = ensureFreeformAnchors(m);
     const vi = nearestVertex(m, px, py);
-    if (vi >= 0 && (m.pts || []).length > 2) {
-      m.pts.splice(vi, 1);
-      if (m.curv && m.curv.length > vi) m.curv.splice(vi, 1);
-      while (m.curv.length > m.pts.length) m.curv.pop();
-      afterChange(); renderPreview();
+
+    if (vi < 0) return;
+
+    if (e.altKey) {
+      if (anchors.length > 3) {
+        anchors.splice(vi, 1);
+
+        if (selectedAnchor === vi) selectedAnchor = -1;
+        if (selectedAnchor > vi) selectedAnchor--;
+      } else {
+        setStatus('Free Form must have at least 3 anchors', 'error');
+      }
+    } else {
+      toggleFreeAnchorMode(m, vi);
+      selectedAnchor = vi;
     }
+
+    afterChange();
+    renderPreview();
   }
 
   function addMask(type) {
@@ -3414,6 +3730,7 @@ const MaskEditor = (() => {
     const m = MaskModel.create(type);
     curLayer.masks.push(m);
     selectedId = m.id;
+    selectedAnchor = -1;
     afterChange();
     renderList();
     renderParams();
@@ -3424,6 +3741,7 @@ const MaskEditor = (() => {
     if (!curLayer) return;
     curLayer.masks = curLayer.masks.filter(m => m.id !== id);
     if (selectedId === id) selectedId = curLayer.masks.length ? curLayer.masks[curLayer.masks.length - 1].id : null;
+    selectedAnchor = -1;
     afterChange();
     renderList();
     renderParams();
@@ -3476,7 +3794,11 @@ const MaskEditor = (() => {
         // НЕ перестраиваем список, если маска уже выбрана — иначе между двумя
         // кликами dblclick DOM уничтожается и переименование не запустится.
         if (m.id === selectedId) { renderParams(); renderPreview(); return; }
-        selectedId = m.id; renderList(); renderParams(); renderPreview();
+        selectedId = m.id;
+        selectedAnchor = -1;
+        renderList();
+        renderParams();
+        renderPreview();
       });
       // двойной клик по строке — переименование (на уровне строки, чтобы
       // перестроение списка по клику не мешало запуску редактирования)
@@ -3771,21 +4093,21 @@ const MaskEditor = (() => {
     ctx.beginPath();
       if (m.type === 'code') return;   // у пользовательского шейдера нет геометрии для пунктира
       if (m.type === 'freeform') {
-        let pts = m.pts || [];
+        const pts = flattenFreeformMask(m, FREE_MAX_PREVIEW_POINTS);
+
         if (pts.length === 0) return;
-        // сглаживаем (и показываем кривизну) если включён Smooth ИЛИ если у
-        // какого-либо сегмента задана ненулевая кривизна — иначе рисуем
-        // чёткий прямоугольный контур из исходных вершин.
-        const curved = m.smooth || (m.curv && m.curv.some(c => c != null && Math.abs(c) > 0.001));
-        if (curved && pts.length >= 3) pts = tessellateFreeform(pts, 12, m.curv);
-      for (let i = 0; i <= pts.length; i++) {
-        const p = pts[i % pts.length];
-        const [px, py] = shaderToScreen(m, p.x, p.y);
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+
+        for (let i = 0; i <= pts.length; i++) {
+          const p = pts[i % pts.length];
+          const [px, py] = shaderToScreen(m, p.x, p.y);
+
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+
+        ctx.closePath();
+        return;
       }
-      ctx.closePath();
-      return;
-    }
     const N = 200;
     for (let i = 0; i <= N; i++) {
       const t = (Math.PI * 2 / N) * i;
@@ -3898,10 +4220,14 @@ const MaskEditor = (() => {
   }
   function freeformBBoxShader(m) {
     let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
-    for (const p of (m.pts || [])) {
-      if (p.x < minx) minx = p.x; if (p.x > maxx) maxx = p.x;
-      if (p.y < miny) miny = p.y; if (p.y > maxy) maxy = p.y;
+
+    for (const p of freeAnchorPositions(m)) {
+      if (p.x < minx) minx = p.x;
+      if (p.x > maxx) maxx = p.x;
+      if (p.y < miny) miny = p.y;
+      if (p.y > maxy) maxy = p.y;
     }
+
     return { minx, maxx, miny, maxy };
   }
   function freeformBBoxScreen(m) {
@@ -3917,7 +4243,7 @@ const MaskEditor = (() => {
     let bx = (uvx - m.cx) * pvAspect;
     let by = uvy - m.cy;
     if (m.type === 'freeform') {
-      const pts = m.pts || [];
+      const pts = freeAnchorPositions(m);
       if (pts.length < 3) return false;
       let inside = false;
       for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -4049,13 +4375,57 @@ const MaskEditor = (() => {
         ctx.beginPath(); ctx.arc(rotP[0], rotP[1], hs * 1.2, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.stroke();
       } else if (sel && m.type === 'freeform') {
-        // вершины — перетаскиваемые точки (Bounding Box не нужен)
-        ctx.fillStyle = '#ffd166';
+        const anchors = ensureFreeformAnchors(m);
+
+        if (selectedAnchor >= anchors.length) selectedAnchor = -1;
+
         const vr = Math.max(5, 6 * SCALE);
-        for (const p of (m.pts || [])) {
-          const [vx, vy] = shaderToScreen(m, p.x, p.y);
-          ctx.beginPath(); ctx.arc(vx, vy, vr, 0, Math.PI * 2); ctx.fill();
-        }
+        const hr = Math.max(4, 4.5 * SCALE);
+
+        anchors.forEach((a, i) => {
+          const [ax, ay] = shaderToScreen(m, a.x, a.y);
+
+          const handles = ['hIn', 'hOut'];
+
+          handles.forEach(k => {
+            const h = a[k];
+
+            if (!h) return;
+            if (Math.abs(h.x) <= 1e-6 && Math.abs(h.y) <= 1e-6) return;
+
+            const [hx, hy] = shaderToScreen(m, a.x + h.x, a.y + h.y);
+
+            ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+            ctx.lineWidth = 1 * SCALE;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(hx, hy);
+            ctx.stroke();
+
+            ctx.fillStyle = k === 'hOut' ? '#7dff8a' : '#7db9ff';
+            ctx.strokeStyle = '#191A23';
+            ctx.beginPath();
+            ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          });
+
+          ctx.fillStyle = i === selectedAnchor ? '#ff6b35' : '#ffd166';
+          ctx.strokeStyle = '#191A23';
+          ctx.lineWidth = 1.5 * SCALE;
+
+          if (a.mode === 'smooth') {
+            ctx.beginPath();
+            ctx.arc(ax, ay, vr, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.rect(ax - vr, ay - vr, vr * 2, vr * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        });
       }
     });
   }
@@ -4074,36 +4444,97 @@ const MaskEditor = (() => {
     return Math.hypot(px - cx, py - cy);
   }
   function nearestVertex(m, px, py) {
-    const pts = m.pts || [];
-    for (let i = 0; i < pts.length; i++) {
-      const [vx, vy] = shaderToScreen(m, pts[i].x, pts[i].y);
-      if (Math.hypot(px - vx, py - vy) <= HITR()) return i;
+    const anchors = ensureFreeformAnchors(m);
+
+    for (let i = 0; i < anchors.length; i++) {
+      const [vx, vy] = shaderToScreen(m, anchors[i].x, anchors[i].y);
+
+      if (Math.hypot(px - vx, py - vy) <= HITR()) {
+        return i;
+      }
     }
+
     return -1;
   }
-  function nearestSegment(m, px, py, maxDist = 30 * pvScale) {
-    const pts = m.pts || []; const n = pts.length; if (n < 2) return -1;
-    let best = -1, bd = 1e9;
-    for (let i = 0; i < n; i++) {
-      const a = shaderToScreen(m, pts[i].x, pts[i].y);
-      const b = shaderToScreen(m, pts[(i + 1) % n].x, pts[(i + 1) % n].y);
-      const d = ptSegDist(px, py, a[0], a[1], b[0], b[1]);
-      if (d < bd) { bd = d; best = i; }
+
+  function hitFreeHandle(m, px, py) {
+    const anchors = ensureFreeformAnchors(m);
+    const r = HITR();
+
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
+
+      if (a.hOut && (Math.abs(a.hOut.x) > 1e-6 || Math.abs(a.hOut.y) > 1e-6)) {
+        const [hx, hy] = shaderToScreen(m, a.x + a.hOut.x, a.y + a.hOut.y);
+
+        if (Math.hypot(px - hx, py - hy) <= r) {
+          return { anchor: i, handle: 'hOut' };
+        }
+      }
+
+      if (a.hIn && (Math.abs(a.hIn.x) > 1e-6 || Math.abs(a.hIn.y) > 1e-6)) {
+        const [hx, hy] = shaderToScreen(m, a.x + a.hIn.x, a.y + a.hIn.y);
+
+        if (Math.hypot(px - hx, py - hy) <= r) {
+          return { anchor: i, handle: 'hIn' };
+        }
+      }
     }
-    return bd <= maxDist ? best : -1;
+
+    return null;
   }
-  // пресеты кривизны (tension) для циклического перебора по ПКМ
-  const CURV_PRESETS = [0.0, 0.3, 0.5, 0.8, 1.0];
-  function cycleCurv(m, seg) {
-    const n = (m.pts || []).length;
-    if (!m.curv) m.curv = [];
-    const cur = (m.curv[seg] != null) ? m.curv[seg] : 0.5;
-    let idx = CURV_PRESETS.findIndex(v => Math.abs(v - cur) < 0.01);
-    idx = (idx + 1) % CURV_PRESETS.length;
-    m.curv[seg] = CURV_PRESETS[idx];
-    // выровнять длину массива под кол-во сегментов
-    while (m.curv.length < n) m.curv.push(0.5);
-    setStatus('Segment curvature → ' + m.curv[seg].toFixed(2), 'info');
+
+  function nearestSegment(m, px, py, maxDist = 30 * pvScale) {
+    const anchors = ensureFreeformAnchors(m);
+    const n = anchors.length;
+
+    if (n < 2) return -1;
+
+    let best = -1;
+    let bd = 1e9;
+
+    for (let i = 0; i < n; i++) {
+      const a = anchors[i];
+      const b = anchors[(i + 1) % n];
+
+      const p0 = { x: a.x, y: a.y };
+      const p3 = { x: b.x, y: b.y };
+
+      if (!freeSegmentHasCurve(a, b)) {
+        const A = shaderToScreen(m, p0.x, p0.y);
+        const B = shaderToScreen(m, p3.x, p3.y);
+
+        const d = ptSegDist(px, py, A[0], A[1], B[0], B[1]);
+
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      } else {
+        const p1 = { x: a.x + a.hOut.x, y: a.y + a.hOut.y };
+        const p2 = { x: b.x + b.hIn.x, y: b.y + b.hIn.y };
+
+        let prev = shaderToScreen(m, p0.x, p0.y);
+        const steps = 10;
+
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const pt = cubicBezierPoint(p0, p1, p2, p3, t);
+          const cur = shaderToScreen(m, pt.x, pt.y);
+
+          const d = ptSegDist(px, py, prev[0], prev[1], cur[0], cur[1]);
+
+          if (d < bd) {
+            bd = d;
+            best = i;
+          }
+
+          prev = cur;
+        }
+      }
+    }
+
+    return bd <= maxDist ? best : -1;
   }
   function onPreviewDown(e) {
     const r = previewCvs.getBoundingClientRect();
@@ -4133,57 +4564,112 @@ const MaskEditor = (() => {
     if (!m || m.type === 'noise') return;
 
     if (m.type === 'freeform') {
-      // 1) перетаскивание вершины (ЛКМ на точке)
-      const vi = nearestVertex(m, px, py);
-      if (e.button === 0 && vi >= 0) {
-        dragMode = 'vtx'; dragVtx = vi;
-        dragStart = { x: px, y: py };
-        previewCvs.setPointerCapture(e.pointerId);
-        return;
-      }
-      // 2) ПКМ между двумя точками — потянуть вверх/вниз, чтобы изогнуть
-      //    этот сегмент (кривизна меняется непрерывно во время перетаскивания).
-      if (e.button === 2) {
-        const seg = nearestSegment(m, px, py, Infinity);
-        if (seg >= 0) {
-          dragMode = 'curv';
-          dragCurvSeg = seg;
-          dragStart = { y: py };
-          dragOrig = { curv: (m.curv && m.curv[seg] != null) ? m.curv[seg] : 0 };
-          previewCvs.setPointerCapture(e.pointerId);
-        }
-        return;
-      }
-      // 3) ЛКМ: если рядом с сегментом — вставить НОВУЮ точку МЕЖДУ двумя
-      //    ближайшими точками (соединяется именно с ними, а не дописывается
-      //    в конец). Иначе (пустое место вдали от фигуры) — переместить маску.
+      const anchors = ensureFreeformAnchors(m);
+
+      // 1) Клик по ручке
       if (e.button === 0) {
-        const seg = nearestSegment(m, px, py);
-        if (seg >= 0) {
-          if ((m.pts || []).length >= 17) { setStatus('Max 17 points', 'error'); return; }
-          const uvx = px / pvSx, uvy = 1 - py / pvSy;
-          const np = { x: (uvx - m.cx) * pvAspect, y: uvy - m.cy };
-          const n = m.pts.length;
-          const insertAt = (seg + 1) % n;        // индекс точки, после которой вставляем
-          m.pts.splice(insertAt, 0, np);
-          // кривизна: новый сегмент наследует кривизну того сегмента, что разделили
-          if (!m.curv) m.curv = [];
-          const oldCurv = (m.curv[seg] != null) ? m.curv[seg] : 0.5;
-          m.curv.splice(insertAt, 0, oldCurv);
-          while (m.curv.length < m.pts.length) m.curv.push(0.5);
-          dragMode = 'vtx'; dragVtx = insertAt;
+        const h = hitFreeHandle(m, px, py);
+
+        if (h) {
+          selectedAnchor = h.anchor;
+
+          // Ctrl/Cmd + клик по ручке = сбросить ручку
+          if (e.ctrlKey || e.metaKey) {
+            const a = anchors[h.anchor];
+            a[h.handle] = { x: 0, y: 0 };
+
+            afterChange();
+            renderPreview();
+            return;
+          }
+
+          dragMode = 'handle';
+          dragAnchor = h.anchor;
+          dragHandleType = h.handle;
+
           previewCvs.setPointerCapture(e.pointerId);
-          afterChange(); renderPreview();
           return;
         }
       }
-      // 4) ЛКМ по пустому месту (вдали от фигуры) — переместить всю маску
+
+      // 2) Клик по точке
+      const ai = nearestVertex(m, px, py);
+
+      // Правый клик по точке = удалить точку
+      if (e.button === 2) {
+        if (ai >= 0 && anchors.length > 3) {
+          anchors.splice(ai, 1);
+
+          if (selectedAnchor === ai) selectedAnchor = -1;
+          else if (selectedAnchor > ai) selectedAnchor--;
+
+          afterChange();
+          renderPreview();
+        }
+
+        return;
+      }
+
+      // Левый клик по точке = drag point
+      if (e.button === 0 && ai >= 0) {
+        selectedAnchor = ai;
+        dragMode = 'anchor';
+        dragVtx = ai;
+
+        previewCvs.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // 3) Клик по сегменту = вставить новую точку
       if (e.button === 0) {
+        const seg = nearestSegment(m, px, py);
+
+        if (seg >= 0) {
+          if (anchors.length >= 32) {
+            setStatus('Max 32 Free Form anchors', 'error');
+            return;
+          }
+
+          const uvx = px / pvSx;
+          const uvy = 1 - py / pvSy;
+
+          const np = {
+            x: (uvx - m.cx) * pvAspect,
+            y: uvy - m.cy
+          };
+
+          const insertAt = (seg + 1) % anchors.length;
+
+          anchors.splice(insertAt, 0, {
+            x: np.x,
+            y: np.y,
+            mode: 'corner',
+            hIn: { x: 0, y: 0 },
+            hOut: { x: 0, y: 0 }
+          });
+
+          selectedAnchor = insertAt;
+          dragMode = 'anchor';
+          dragVtx = insertAt;
+
+          previewCvs.setPointerCapture(e.pointerId);
+          afterChange();
+          renderPreview();
+          return;
+        }
+      }
+
+      // 4) Клик по пустому месту = перемещение всей маски
+      if (e.button === 0) {
+        selectedAnchor = -1;
+
         dragMode = 'move';
         dragOrig = { cx: m.cx, cy: m.cy };
         dragStart = { x: px, y: py };
+
         previewCvs.setPointerCapture(e.pointerId);
       }
+
       return;
     }
 
@@ -4249,9 +4735,37 @@ const MaskEditor = (() => {
       let ny = dragOrig.cy - dy / H;
       m.cx = Math.max(0, Math.min(1, nc));
       m.cy = Math.max(0, Math.min(1, ny));
-    } else if (dragMode === 'vtx') {
-      const uvx = px / W, uvy = 1 - py / H;
-      m.pts[dragVtx] = { x: (uvx - m.cx) * pvAspect, y: uvy - m.cy };
+    } else if (dragMode === 'anchor') {
+      const anchors = ensureFreeformAnchors(m);
+      const a = anchors[dragVtx];
+
+      if (a) {
+        const uvx = px / W;
+        const uvy = 1 - py / H;
+
+        a.x = (uvx - m.cx) * pvAspect;
+        a.y = uvy - m.cy;
+      }
+    } else if (dragMode === 'handle') {
+      const anchors = ensureFreeformAnchors(m);
+      const a = anchors[dragAnchor];
+
+      if (a && dragHandleType) {
+        const uvx = px / W;
+        const uvy = 1 - py / H;
+
+        const lx = (uvx - m.cx) * pvAspect;
+        const ly = uvy - m.cy;
+
+        setFreeAnchorHandle(
+          m,
+          dragAnchor,
+          dragHandleType,
+          lx - a.x,
+          ly - a.y,
+          e.altKey
+        );
+      }
     } else if (dragMode === 'rotate') {
       const [ccx, ccy] = localToScreen(m, 0, 0);
       const ang = Math.atan2(py - ccy, px - ccx);
@@ -4303,7 +4817,14 @@ const MaskEditor = (() => {
   }
   function onPreviewUp(e) {
     if (!dragMode) return;
-    dragMode = null; dragHandle = null; dragVtx = -1; dragCurvSeg = -1;
+
+    dragMode = null;
+    dragHandle = null;
+    dragVtx = -1;
+    dragCurvSeg = -1;
+    dragAnchor = -1;
+    dragHandleType = null;
+
     afterChange();
   }
 
@@ -4334,28 +4855,142 @@ const MaskEditor = (() => {
   }
 
   function buildFreeformUI(host, m) {
+    const anchors = ensureFreeformAnchors(m);
+
+    if (selectedAnchor >= anchors.length) selectedAnchor = -1;
+
     const note = document.createElement('div');
     note.className = 'mask-note';
-    note.textContent = 'Edit the shape directly in the Mask Stack Preview: click empty area to add a point between the two nearest points, drag a yellow dot to move it, double-click a dot to delete it. Right-click-drag a segment up/down to bend its curvature. "Smooth (Curves)" rounds every segment; without it only segments with non-zero curvature are bent.';
-    note.setAttribute('data-tip', 'How to edit Free Form points directly in the preview');
+    note.textContent =
+      'Free Form Bezier: drag anchor to move. Drag green/blue handles to bend. ' +
+      'Click a segment to add anchor. Right-click anchor to delete. ' +
+      'Double-click anchor to toggle Smooth/Corner. Alt + double-click deletes anchor. ' +
+      'Alt + drag handle breaks smooth symmetry. Ctrl/Cmd + click handle resets handle.';
     host.appendChild(note);
 
-    checkbox(host, 'Smooth (Curves)', !!m.smooth, v => { m.smooth = v; afterChange(); renderPreview(); });
+    function makeButton(text, title, onClick) {
+      const b = document.createElement('button');
+      b.className = 'mask-clear-btn';
+      b.textContent = text;
+      b.title = title;
 
-    const row = document.createElement('div');
-    const rm = document.createElement('button'); rm.className = 'mask-clear-btn'; rm.textContent = 'Remove Last Point';
-    rm.setAttribute('data-tip', 'Remove the last added point from the Free Form curve');
-    rm.addEventListener('click', () => { m.pts.pop(); afterChange(); renderPreview(); });
-    const clr = document.createElement('button'); clr.className = 'mask-clear-btn'; clr.textContent = 'Reset Shape';
-    clr.setAttribute('data-tip', 'Reset the Free Form shape to the default 4-point rectangle');
-    clr.addEventListener('click', () => {
-      m.pts = MaskModel.create('freeform').pts;
-      m.curv = [];                 // сбрасываем кривизну сегментов
-      m.smooth = false;            // и режим сглаживания — к базовой форме
-      afterChange(); renderPreview();
-    });
-    row.append(rm, clr);
-    host.appendChild(row);
+      b.addEventListener('click', () => {
+        onClick();
+        renderPreview();
+      });
+
+      return b;
+    }
+
+    const row1 = document.createElement('div');
+    row1.style.display = 'flex';
+    row1.style.gap = '6px';
+    row1.style.flexWrap = 'wrap';
+    row1.style.marginBottom = '6px';
+
+    row1.appendChild(
+      makeButton('Smooth Point', 'Make selected anchor smooth', () => {
+        if (selectedAnchor < 0) {
+          setStatus('Select a Free Form anchor first', 'error');
+          return;
+        }
+
+        makeFreeAnchorSmooth(m, selectedAnchor);
+        afterChange();
+      })
+    );
+
+    row1.appendChild(
+      makeButton('Corner Point', 'Make selected anchor a corner', () => {
+        if (selectedAnchor < 0) {
+          setStatus('Select a Free Form anchor first', 'error');
+          return;
+        }
+
+        const a = anchors[selectedAnchor];
+        if (!a) return;
+
+        a.mode = 'corner';
+        afterChange();
+      })
+    );
+
+    row1.appendChild(
+      makeButton('Reset Handles', 'Reset handles of selected anchor', () => {
+        if (selectedAnchor < 0) {
+          setStatus('Select a Free Form anchor first', 'error');
+          return;
+        }
+
+        resetFreeAnchorHandles(m, selectedAnchor);
+        afterChange();
+      })
+    );
+
+    row1.appendChild(
+      makeButton('Delete Point', 'Delete selected anchor', () => {
+        if (selectedAnchor < 0) {
+          setStatus('Select a Free Form anchor first', 'error');
+          return;
+        }
+
+        if (anchors.length <= 3) {
+          setStatus('Free Form must have at least 3 anchors', 'error');
+          return;
+        }
+
+        anchors.splice(selectedAnchor, 1);
+        selectedAnchor = -1;
+
+        afterChange();
+      })
+    );
+
+    host.appendChild(row1);
+
+    const row2 = document.createElement('div');
+    row2.style.display = 'flex';
+    row2.style.gap = '6px';
+    row2.style.flexWrap = 'wrap';
+
+    row2.appendChild(
+      makeButton('Smooth All', 'Make all anchors smooth', () => {
+        for (let i = 0; i < anchors.length; i++) {
+          makeFreeAnchorSmooth(m, i);
+        }
+
+        afterChange();
+      })
+    );
+
+    row2.appendChild(
+      makeButton('Corner All', 'Make all anchors sharp corners', () => {
+        anchors.forEach(a => {
+          a.mode = 'corner';
+          a.hIn = { x: 0, y: 0 };
+          a.hOut = { x: 0, y: 0 };
+        });
+
+        afterChange();
+      })
+    );
+
+    row2.appendChild(
+      makeButton('Reset Shape', 'Reset Free Form shape', () => {
+        const def = MaskModel.create('freeform');
+
+        m.anchors = def.anchors.map(a => _normalizeFreeAnchor(a));
+        m.pts = def.pts;
+        m.curv = [];
+        m.smooth = false;
+
+        selectedAnchor = -1;
+
+        afterChange();
+      })
+    );
+
+    host.appendChild(row2);
   }
 
   return { open };
@@ -5411,13 +6046,57 @@ const MaskModel = {
       code: '',
     };
     if (type === 'code') base.code = DEFAULT_MASK_CODE;
+
+      if (type === 'freeform') {
+        base.geom = 'bezier';
+        base.anchors = [
+          {
+            x: -0.2,
+            y: -0.2,
+            mode: 'corner',
+            hIn: { x: 0, y: 0 },
+            hOut: { x: 0, y: 0 }
+          },
+          {
+            x: 0.2,
+            y: -0.15,
+            mode: 'corner',
+            hIn: { x: 0, y: 0 },
+            hOut: { x: 0, y: 0 }
+          },
+          {
+            x: 0.18,
+            y: 0.2,
+            mode: 'corner',
+            hIn: { x: 0, y: 0 },
+            hOut: { x: 0, y: 0 }
+          },
+          {
+            x: -0.16,
+            y: 0.22,
+            mode: 'corner',
+            hIn: { x: 0, y: 0 },
+            hOut: { x: 0, y: 0 }
+          }
+        ];
+      }
+
     return base;
   },
 
   clone(mask) {
     if (!mask) return null;
+
     const c = { ...mask };
-    if (Array.isArray(c.pts)) c.pts = c.pts.map(p => ({ x: p.x, y: p.y }));
+
+    if (Array.isArray(c.pts)) {
+      c.pts = c.pts.map(p => ({ x: p.x, y: p.y }));
+    }
+
+    if (Array.isArray(c.anchors)) {
+      c.anchors = c.anchors.map(a => _normalizeFreeAnchor(a));
+    }
+
     return c;
   },
 
@@ -5425,9 +6104,20 @@ const MaskModel = {
 
   deserialize(data) {
     if (!data || !data.type) return null;
+
     const m = this.create(data.type);
     Object.assign(m, data);
-    if (!Array.isArray(m.pts)) m.pts = MaskModel.create('freeform').pts;
+
+    if (!Array.isArray(m.pts)) {
+      m.pts = MaskModel.create('freeform').pts;
+    }
+
+    if (m.type === 'freeform') {
+      // старая сохранённая маска (без поля anchors) — конвертируем из pts+curv
+      if (!Array.isArray(data.anchors) || data.anchors.length === 0) m.anchors = [];
+      ensureFreeformAnchors(m);
+    }
+
     return m;
   }
 };
