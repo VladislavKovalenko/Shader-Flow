@@ -1433,31 +1433,6 @@ const DEFAULT_UNIFORMS = [
   { name: 'uColor2', type: 'vec3color', value: [0.2,  0.5,  0.9] },
 ];
 
-const DEFAULT_GENERATOR_TEMPLATE = `// ═══════════════════════════════════════════════════════════
-// GENERATOR SHADER — генерирует изображение с нуля (без текстуры)
-// ═══════════════════════════════════════════════════════════
-//
-// Встроенные переменные (не объявляй сам):
-//   vec2  iResolution — размер canvas
-//   float iTime       — время в секундах
-//   vec2  iMouse      — позиция мыши (0.0..1.0)
-//
-// Пример параметра (появится в панели Parameters):
-//   uniform float uSpeed;
-
-precision mediump float;
-uniform float uSpeed;
-
-void main() {
-  vec2 uv = gl_FragCoord.xy / iResolution.xy;
-
-  // Подвижный градиент как отправная точка
-  float t = iTime * uSpeed;
-  vec3 col = vec3(uv.x, uv.y, 0.5 + 0.5 * sin(t));
-
-  gl_FragColor = vec4(col, 1.0);
-}`;
-
 const DEFAULT_EFFECT_TEMPLATE = `// ═══════════════════════════════════════════════════════════
 // EFFECT SHADER — обрабатывает входное изображение (текстуру)
 // ═══════════════════════════════════════════════════════════
@@ -1491,11 +1466,199 @@ void main() {
   gl_FragColor = vec4(src.rgb, src.a);
 }`;
 
-const DEFAULT_SHADER_TEMPLATE = `precision mediump float;
+const DEFAULT_SHADER_TEMPLATE = `// ═══════════════════════════════════════════════════════════════════════════
+//  SHADER FLOW — TEMPLATE SHADER (Generator)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+//  Welcome! This template demonstrates the core concepts of Shader Flow.
+//  Use it as a starting point for your own shaders, or feed it to any AI
+//  to learn how shaders work in this plugin.
+//
+//  ━━ HOW SHADER FLOW WORKS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//  1. GENERATOR LAYERS (like this one) create images FROM SCRATCH.
+//     They don't need a texture — they draw directly to the canvas.
+//     Use them for: gradients, noise, patterns, procedural art.
+//
+//  2. EFFECT LAYERS process the image from the layer BELOW them.
+//     They read uTexture and modify it.
+//     Use them for: blur, chromatic aberration, color grading, distortions.
+//
+//  3. LAYERS stack bottom-to-top. Each layer can have MASKS that control
+//     WHERE the effect applies (circle, rectangle, freeform curve, noise...).
+//
+//  ━━ BUILT-IN VARIABLES (don't declare these yourself!) ━━━━━━━━━━━━━━━━━━
+//
+//    vec2  iResolution    — canvas size in pixels (width, height)
+//    float iTime          — time in seconds since the shader started
+//    vec2  iMouse         — mouse position normalized to 0.0..1.0
+//    sampler2D uTexture   — result from the previous layer (effects only)
+//    int   uHasTexture    — 1 if uTexture exists, 0 if not
+//
+//  ━━ ADDING PARAMETERS (they appear in the left "Parameters" panel) ━━━━━━
+//
+//    Just declare a uniform — Shader Flow auto-detects it:
+//
+//      uniform float uMySlider;     // appears as a slider (default 0..1)
+//      uniform int   uMyInt;        // appears as integer slider
+//      uniform bool  uMyToggle;     // appears as on/off switch
+//      uniform vec2  uMyVector;     // appears as two number inputs
+//      uniform vec3  uMyColor;      // appears as a color picker!
+//
+//    To customize slider ranges: edit the parameter in the Parameters panel
+//    after compiling (click the parameter name → set min/max).
+//
+//  ━━ COLOR PICKER TRICK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//    Any vec3 with "Color" or "Col" in its name becomes a color picker:
+//      uniform vec3 uGlowColor;   // color picker ✓
+//      uniform vec3 uAccentCol;   // color picker ✓
+//      uniform vec3 uOffset;      // three number inputs (no "color" in name)
+//
+//  ━━ GLSL TIPS FOR THIS PLUGIN ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//    ✓ Always start with: precision mediump float;
+//    ✓ Use 1.0 not 1, 0.5 not .5 (floats need decimal points)
+//    ✓ No recursion in GLSL — functions can't call themselves
+//    ✓ Loops need CONSTANT bounds: for(int i=0; i<8; i++) — NOT i<uCount
+//    ✓ Arrays inside functions are OK, but uniform arrays are NOT supported
+//    ✓ Use mix(a, b, t) instead of if/else when possible (GPU-friendly)
+//    ✓ pow(x, y) requires x >= 0.0
+//    ✓ texture2D() is NOT available in Generator layers (no input texture)
+//
+//  ━━ OUTPUT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//    Write your final color to: gl_FragColor = vec4(red, green, blue, alpha);
+//    Alpha = 1.0 for opaque, 0.0 for fully transparent.
+//
+// ═══════════════════════════════════════════════════════════════════════════
 
+
+precision mediump float;
+
+
+// ── Parameters (auto-detected by Shader Flow) ─────────────────────────────
+
+
+uniform float uSpeed;        // Animation speed
+uniform float uScale;        // Pattern scale
+uniform float uIridescence;  // Iridescent color shift intensity
+uniform vec3  uColorA;       // Primary fluid color
+uniform vec3  uColorB;       // Secondary fluid color
+uniform vec3  uColorC;       // Highlight / accent color
+
+
+// ── Helper: pseudo-random hash ───────────────────────────────────────────
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+
+// ── Helper: smooth 2D noise ──────────────────────────────────────────────
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+  
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+
+// ── Helper: fractal Brownian motion ──────────────────────────────────────
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p);
+    p *= 2.0;
+    amplitude *= 0.5;
+  }
+  return value;
+}
+
+
+// ── Helper: iridescent color palette ─────────────────────────────────────
+vec3 iridescent(float t, vec3 c1, vec3 c2, vec3 c3) {
+  // Create rainbow-like color cycling based on interference patterns
+  float phase = t * 6.28318;
+  vec3 col = c1 * (0.5 + 0.5 * sin(phase));
+  col += c2 * (0.5 + 0.5 * sin(phase + 2.094));  // +120°
+  col += c3 * (0.5 + 0.5 * sin(phase + 4.188));  // +240°
+  return col / 1.5;
+}
+
+
+// ── Main shader: Iridescent Fluid ────────────────────────────────────────
 void main() {
+  // Normalized UV coordinates
   vec2 uv = gl_FragCoord.xy / iResolution.xy;
-  gl_FragColor = vec4(uv, 0.5, 1.0);
+  
+  // Aspect-ratio correction
+  vec2 uvAspect = uv;
+  uvAspect.x *= iResolution.x / iResolution.y;
+  
+  // Time-based animation
+  float t = iTime * uSpeed;
+  
+  // ── Domain warping: create flowing liquid shapes ─────────────────────
+  // First pass: base distortion
+  vec2 q = uvAspect * uScale;
+  float n1 = fbm(q + vec2(t * 0.2, t * 0.15));
+  
+  // Second pass: warp coordinates using first noise layer
+  vec2 warp1 = vec2(
+    fbm(q + vec2(n1 * 2.0 + t * 0.3, n1 * 1.5 - t * 0.2)),
+    fbm(q + vec2(n1 * 1.5 - t * 0.25, n1 * 2.0 + t * 0.3))
+  );
+  
+  // Third pass: deeper warp for organic flow
+  vec2 warp2 = vec2(
+    fbm(q + warp1 * 3.0 + vec2(t * 0.1, -t * 0.15)),
+    fbm(q + warp1 * 3.0 + vec2(-t * 0.15, t * 0.1))
+  );
+  
+  // Final fluid pattern
+  float fluid = fbm(q + warp2 * 2.5);
+  
+  // ── Iridescent coloring ──────────────────────────────────────────────
+  // Use warp magnitude to drive color shifts (like oil on water)
+  float warpStrength = length(warp2) * uIridescence;
+  float colorPhase = fluid + warpStrength * 0.5 + t * 0.1;
+  
+  vec3 col = iridescent(colorPhase, uColorA, uColorB, uColorC);
+  
+  // ── Add depth and highlights ─────────────────────────────────────────
+  // Fresnel-like effect: brighter at edges of fluid forms
+  float edge = abs(fluid - 0.5) * 2.0;
+  edge = pow(edge, 2.0);
+  
+  // Bright highlights in high-contrast areas
+  float highlight = smoothstep(0.6, 0.9, fluid) * (1.0 - edge);
+  col += uColorC * highlight * 0.4;
+  
+  // Subtle color variation based on warp
+  col *= 0.85 + 0.3 * warpStrength;
+  
+  // ── Vignette (focus attention to center) ─────────────────────────────
+  float vig = uv.x * uv.y * (1.0 - uv.x) * (1.0 - uv.y);
+  vig = pow(vig * 16.0, 0.3);
+  col *= 0.7 + 0.3 * vig;
+  
+  // ── Final adjustments ────────────────────────────────────────────────
+  // Boost saturation slightly
+  float luminance = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(luminance), col, 1.2);
+  
+  // Clamp to valid color range
+  col = clamp(col, 0.0, 1.0);
+  
+  // Output: RGB + Alpha (1.0 = fully opaque)
+  gl_FragColor = vec4(col, 1.0);
 }`;
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -3361,128 +3524,118 @@ const UniformsUI = (() => {
 
   function buildControl(u, idx) {
     const wrap = document.createElement('div');
-
     if (u.type === 'float' || u.type === 'int') {
-      const valRow = document.createElement('div');
-      valRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
-
-      const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.className = 'u-slider';
-      const step = u.type === 'int' ? '1' : '0.001';
-      slider.min  = u.min !== undefined ? u.min : 0;
-      slider.max  = u.max !== undefined ? u.max : 1;
-      slider.step = step;
-      slider.value = u.value;
-
-      const valLabel = document.createElement('span');
-      valLabel.className = 'uniform-value';
-      valLabel.style.minWidth = '44px';
-      valLabel.textContent = fmt(u.value, u.type);
-
-      slider.addEventListener('input', () => {
-        const v = u.type === 'int' ? parseInt(slider.value) : parseFloat(slider.value);
-        S.uniforms[idx].value = v;
-        valLabel.textContent = fmt(v, u.type);
-        if (_onChange) _onChange('value');
-      });
-
-      // Захват указателя: ползунок не теряет слежение при быстром движении мыши,
-      // пока ЛКМ зажата (даже если курсор выходит за пределы элемента).
-      slider.addEventListener('pointerdown', (e) => {
-        try { slider.setPointerCapture(e.pointerId); } catch (_) {}
-      });
-      // Один шаг Undo на отпускание (change), а не на каждый кадр input.
-      slider.addEventListener('change', () => { UndoRedo.pushImmediate(); });
-
-      valRow.append(slider, valLabel);
-      wrap.appendChild(valRow);
-
-    } else if (u.type === 'bool') {
-      const toggleWrap = document.createElement('div');
-      toggleWrap.className = 'u-toggle-wrap';
-
-      const label = document.createElement('label');
-      label.className = 'u-toggle';
-      const inp = document.createElement('input');
-      inp.type = 'checkbox';
-      inp.checked = !!u.value;
-      const slider = document.createElement('div');
-      slider.className = 'u-toggle-slider';
-      label.append(inp, slider);
-
-      const textEl = document.createElement('span');
-      textEl.style.cssText = 'font-size:11px;color:#888;';
-      textEl.textContent = u.value ? 'true' : 'false';
-
-      inp.addEventListener('change', () => {
-        S.uniforms[idx].value = inp.checked;
-        textEl.textContent = inp.checked ? 'true' : 'false';
-        if (_onChange) _onChange('value');
-      });
-
-      toggleWrap.append(label, textEl);
-      wrap.appendChild(toggleWrap);
-
-    } else if (u.type === 'vec3color') {
-      const colorRow = document.createElement('div');
-      colorRow.className = 'u-color-row';
-
-      const v = u.value;
-      const hexVal = rgbToHex(v[0], v[1], v[2]);
-
-      const swatch = document.createElement('div');
-      swatch.className = 'u-color-swatch';
-      swatch.style.background = hexVal;
-
-      const hexInput = document.createElement('input');
-      hexInput.type = 'text';
-      hexInput.className = 'u-color-hex';
-      hexInput.value = hexVal.slice(1).toUpperCase();
-      hexInput.maxLength = 6;
-
-      const applyRgb = (rgb) => {
-        S.uniforms[idx].value = rgb;
-        swatch.style.background = rgbToHex(rgb[0], rgb[1], rgb[2]);
-        hexInput.value = rgbToHex(rgb[0], rgb[1], rgb[2]).slice(1).toUpperCase();
-        if (_onChange) _onChange('value');
-      };
-
-      swatch.addEventListener('click', (e) => {
-        e.stopPropagation();
-        ColorPicker.open(swatch, v, (rgb) => applyRgb(rgb));
-      });
-      hexInput.addEventListener('change', () => {
-        const h = '#' + hexInput.value.replace('#','').padStart(6,'0');
-        const rgb = hexToRgb(h);
-        applyRgb(rgb);
-        UndoRedo.push();
-      });
-
-      colorRow.append(swatch, hexInput);
-      wrap.appendChild(colorRow);
-
-    } else if (u.type === 'vec2' || u.type === 'vec3') {
-      const dims = u.type === 'vec2' ? 2 : 3;
-      const vecRow = document.createElement('div');
-      vecRow.className = 'u-vec-row';
-
-      for (let d = 0; d < dims; d++) {
-        const inp = document.createElement('input');
-        inp.type = 'number';
-        inp.className = 'u-vec-input';
-        inp.value = (u.value[d] || 0).toFixed(3);
-        inp.step = '0.01';
-        inp.addEventListener('change', () => {
-          S.uniforms[idx].value[d] = parseFloat(inp.value) || 0;
-          if (_onChange) _onChange('value');
-          UndoRedo.push();
+        const valRow = document.createElement('div');
+        valRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'u-slider';
+        const step = u.type === 'int' ? '1' : '0.001';
+        slider.min  = u.min !== undefined ? u.min : 0;
+        slider.max  = u.max !== undefined ? u.max : 1;
+        slider.step = step;
+        slider.value = u.value;
+        const valLabel = document.createElement('span');
+        valLabel.className = 'uniform-value';
+        valLabel.style.minWidth = '44px';
+        valLabel.textContent = fmt(u.value, u.type);
+        
+        slider.addEventListener('pointerdown', (e) => {
+            try { slider.setPointerCapture(e.pointerId); } catch (_) {}
+            UndoRedo.pushImmediate(); // Snapshot BEFORE dragging
         });
-        vecRow.appendChild(inp);
-      }
-      wrap.appendChild(vecRow);
+        slider.addEventListener('input', () => {
+            const v = u.type === 'int' ? parseInt(slider.value) : parseFloat(slider.value);
+            S.uniforms[idx].value = v;
+            valLabel.textContent = fmt(v, u.type);
+            if (_onChange) _onChange('value');
+        });
+        slider.addEventListener('change', () => { UndoRedo.pushImmediate(); }); // Snapshot AFTER
+        
+        valRow.append(slider, valLabel);
+        wrap.appendChild(valRow);
+    } else if (u.type === 'bool') {
+        const toggleWrap = document.createElement('div');
+        toggleWrap.className = 'u-toggle-wrap';
+        const label = document.createElement('label');
+        label.className = 'u-toggle';
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.checked = !!u.value;
+        const slider = document.createElement('div');
+        slider.className = 'u-toggle-slider';
+        label.append(inp, slider);
+        const textEl = document.createElement('span');
+        textEl.style.cssText = 'font-size:11px;color:#888;';
+        textEl.textContent = u.value ? 'true' : 'false';
+        
+        inp.addEventListener('mousedown', () => { UndoRedo.pushImmediate(); }); // BEFORE
+        inp.addEventListener('change', () => {
+            S.uniforms[idx].value = inp.checked;
+            textEl.textContent = inp.checked ? 'true' : 'false';
+            if (_onChange) _onChange('value');
+            UndoRedo.pushImmediate(); // AFTER
+        });
+        
+        toggleWrap.append(label, textEl);
+        wrap.appendChild(toggleWrap);
+    } else if (u.type === 'vec3color') {
+        const colorRow = document.createElement('div');
+        colorRow.className = 'u-color-row';
+        const v = u.value;
+        const hexVal = rgbToHex(v[0], v[1], v[2]);
+        const swatch = document.createElement('div');
+        swatch.className = 'u-color-swatch';
+        swatch.style.background = hexVal;
+        const hexInput = document.createElement('input');
+        hexInput.type = 'text';
+        hexInput.className = 'u-color-hex';
+        hexInput.value = hexVal.slice(1).toUpperCase();
+        hexInput.maxLength = 6;
+        
+        let colorPushTimer = null;
+        const applyRgb = (rgb) => {
+            S.uniforms[idx].value = rgb;
+            swatch.style.background = rgbToHex(rgb[0], rgb[1], rgb[2]);
+            hexInput.value = rgbToHex(rgb[0], rgb[1], rgb[2]).slice(1).toUpperCase();
+            if (_onChange) _onChange('value');
+            clearTimeout(colorPushTimer);
+            colorPushTimer = setTimeout(() => UndoRedo.pushImmediate(), 300); // Debounced AFTER
+        };
+        
+        swatch.addEventListener('click', (e) => {
+            e.stopPropagation();
+            UndoRedo.pushImmediate(); // BEFORE opening picker
+            ColorPicker.open(swatch, v, (rgb) => applyRgb(rgb));
+        });
+        hexInput.addEventListener('focus', () => { UndoRedo.pushImmediate(); }); // BEFORE typing
+        hexInput.addEventListener('change', () => {
+            const h = '#' + hexInput.value.replace('#','').padStart(6,'0');
+            const rgb = hexToRgb(h);
+            applyRgb(rgb);
+        });
+        colorRow.append(swatch, hexInput);
+        wrap.appendChild(colorRow);
+    } else if (u.type === 'vec2' || u.type === 'vec3') {
+        const dims = u.type === 'vec2' ? 2 : 3;
+        const vecRow = document.createElement('div');
+        vecRow.className = 'u-vec-row';
+        for (let d = 0; d < dims; d++) {
+            const inp = document.createElement('input');
+            inp.type = 'number';
+            inp.className = 'u-vec-input';
+            inp.value = (u.value[d] || 0).toFixed(3);
+            inp.step = '0.01';
+            inp.addEventListener('focus', () => { UndoRedo.pushImmediate(); }); // BEFORE typing
+            inp.addEventListener('change', () => {
+                S.uniforms[idx].value[d] = parseFloat(inp.value) || 0;
+                if (_onChange) _onChange('value');
+                UndoRedo.pushImmediate(); // AFTER
+            });
+            vecRow.appendChild(inp);
+        }
+        wrap.appendChild(vecRow);
     }
-
     return wrap;
   }
 
@@ -6264,8 +6417,8 @@ uniform int uHasTexture;
     }));
   }
 
-  function activateLayer(id) {
-    if (activeLayerId && activeLayerId !== id) {
+  function activateLayer(id, skipSave = false) {
+    if (!skipSave && activeLayerId && activeLayerId !== id) {
       saveCurrentToLayer(activeLayerId);
     }
     activeLayerId = id;
@@ -6397,7 +6550,7 @@ uniform int uHasTexture;
     }));
   }
 
-  function setAll(arr) {
+  function setAll(arr, activeId = null, skipSave = false) {
     layers = (arr || []).map(l => ({
       id: l.id,
       name: l.name,
@@ -6407,10 +6560,22 @@ uniform int uHasTexture;
       masks: (l.masks || []).map(m => MaskModel.deserialize(m)).filter(Boolean),
       _prog: _compileProg(l.code)
     }));
-    activeLayerId = layers.length > 0 ? layers[layers.length - 1].id : null;
+    
+    let targetId = activeId;
+    if (targetId && !layers.find(l => l.id === targetId)) targetId = null;
+    if (!targetId && layers.length > 0) targetId = layers[layers.length - 1].id;
+    
+    activeLayerId = targetId;
     renderList();
-    if (activeLayerId) activateLayer(activeLayerId);
-    else { document.getElementById('code-editor').value = ''; S.uniforms = []; UniformsUI.renderAll(); updateLineNumbers(); }
+    
+    if (activeLayerId) {
+      activateLayer(activeLayerId, skipSave);
+    } else { 
+      document.getElementById('code-editor').value = ''; 
+      S.uniforms = []; 
+      UniformsUI.renderAll(); 
+      updateLineNumbers(); 
+    }
   }
 
   return {
@@ -6462,10 +6627,9 @@ uniform int uHasTexture;
 
 const UndoRedo = (() => {
     const MAX = 50;
-    let mode = 'global';
     let _locked = false;
-    let _pushTimerG = null, _pushTimerC = null;
-    const H = { global: { stack: [], pointer: -1 }, code: { stack: [], pointer: -1 } };
+    let _pushTimerG = null;
+    const H = { stack: [], pointer: -1 };
 
     function _cloneLayers(list) {
         return (list || []).map(l => ({
@@ -6476,10 +6640,8 @@ const UndoRedo = (() => {
             masks: (l.masks || []).map(m => MaskModel.serialize(m))
         }));
     }
-    function _snapshotCode() {
-        return { code: document.getElementById('code-editor').value };
-    }
-    function _snapshotGlobal() {
+
+    function _snapshot() {
         return {
             code: document.getElementById('code-editor').value,
             uniforms: JSON.parse(JSON.stringify(S.uniforms)),
@@ -6488,7 +6650,9 @@ const UndoRedo = (() => {
             masterMask: MasterMaskState.masks.map(m => MaskModel.serialize(m))
         };
     }
+
     function _equal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
     function _pushTo(h, snap) {
         if (h.pointer >= 0 && _equal(h.stack[h.pointer], snap)) return;
         h.stack = h.stack.slice(0, h.pointer + 1);
@@ -6497,60 +6661,55 @@ const UndoRedo = (() => {
         h.pointer = h.stack.length - 1;
         _updateButtons();
     }
+
     function push() {
         if (_locked) return;
         clearTimeout(_pushTimerG);
-        _pushTimerG = setTimeout(() => _pushTo(H.global, _snapshotGlobal()), 250);
+        _pushTimerG = setTimeout(() => _pushTo(H, _snapshot()), 250);
     }
+
     function pushImmediate() {
         if (_locked) return;
         clearTimeout(_pushTimerG);
-        _pushTo(H.global, _snapshotGlobal());
+        _pushTo(H, _snapshot());
     }
-    function pushCode() {
-        if (_locked) return;
-        clearTimeout(_pushTimerC);
-        _pushTimerC = setTimeout(() => _pushTo(H.code, _snapshotCode()), 250);
-    }
-    function setMode(m) {
-        mode = m === 'code' ? 'code' : 'global';
-        if (mode === 'code' && H.code.pointer < 0) _pushTo(H.code, _snapshotCode());
-        _updateButtons();
-    }
-    function undo() { const h = H[mode]; if (h.pointer <= 0) return; h.pointer--; _restore(h.stack[h.pointer]); }
-    function redo() { const h = H[mode]; if (h.pointer >= h.stack.length - 1) return; h.pointer++; _restore(h.stack[h.pointer]); }
+
+    function undo() { if (H.pointer <= 0) return; H.pointer--; _restore(H.stack[H.pointer]); }
+    function redo() { if (H.pointer >= H.stack.length - 1) return; H.pointer++; _restore(H.stack[H.pointer]); }
+
     function _restore(snap) {
         _locked = true;
-        const isCode = snap && typeof snap.code === 'string' && !('uniforms' in snap);
-        if (mode === 'code' || isCode) {
-            document.getElementById('code-editor').value = snap.code;
-            updateLineNumbers(); compile();
-        } else {
+        
+        S.uniforms = JSON.parse(JSON.stringify(snap.uniforms));
+        ShaderLayers.setAll(snap.shaderLayers, snap.activeLayerId, true); // skipSave = true
+        
+        const active = ShaderLayers.getActive();
+        if (!active) {
             document.getElementById('code-editor').value = snap.code;
             S.uniforms = JSON.parse(JSON.stringify(snap.uniforms));
-            ShaderLayers.setAll(snap.shaderLayers);
-            if (snap.activeLayerId && ShaderLayers.getLayer(snap.activeLayerId))
-                ShaderLayers.activateLayer(snap.activeLayerId);
-
-            if (snap.masterMask) {
-                MasterMaskState.masks = snap.masterMask.map(m => MaskModel.deserialize(m)).filter(Boolean);
-            } else {
-                MasterMaskState.masks = [];
-            }
-            updateMasterMaskButton();
-
-            UniformsUI.renderAll(); updateLineNumbers(); compile();
-            autoUpdatePanelsVisibility();
+            UniformsUI.renderAll();
+            updateLineNumbers();
+            compile();
         }
+        
+        if (snap.masterMask) {
+            MasterMaskState.masks = snap.masterMask.map(m => MaskModel.deserialize(m)).filter(Boolean);
+        } else {
+            MasterMaskState.masks = [];
+        }
+        updateMasterMaskButton();
+        autoUpdatePanelsVisibility();
+        
         _locked = false; _updateButtons();
     }
+
     function _updateButtons() {
-        const h = H[mode];
         const u = document.getElementById('btn-undo'), r = document.getElementById('btn-redo');
-        if (u) u.disabled = h.pointer <= 0;
-        if (r) r.disabled = h.pointer >= h.stack.length - 1;
+        if (u) u.disabled = H.pointer <= 0;
+        if (r) r.disabled = H.pointer >= H.stack.length - 1;
     }
-    return { push, pushCode, pushImmediate, setMode, undo, redo, isLocked: () => _locked };
+
+    return { push, pushImmediate, undo, redo, isLocked: () => _locked };
 })();
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -7075,9 +7234,14 @@ const LibraryPreview = (() => {
   window.addEventListener('resize', resizeCanvas);
 
   // На старте грузим базовый шейдер-пример с инструкцией (как писать шейдеры)
-  const defaultGenCode = DEFAULT_GENERATOR_TEMPLATE;
+  const defaultGenCode = DEFAULT_SHADER_TEMPLATE;
   const defaultGenUniforms = [
-    { name: 'uSpeed', type: 'float', value: 0.5, min: 0.0, max: 3.0 }
+    { name: 'uSpeed',       type: 'float',     value: 0.3,  min: 0.0,  max: 2.0 },
+    { name: 'uScale',       type: 'float',     value: 3.0,  min: 1.0,  max: 10.0 },
+    { name: 'uIridescence', type: 'float',     value: 1.5,  min: 0.0,  max: 3.0 },
+    { name: 'uColorA',      type: 'vec3color', value: [0.1,  0.4,  0.9] },
+    { name: 'uColorB',      type: 'vec3color', value: [0.9,  0.2,  0.6] },
+    { name: 'uColorC',      type: 'vec3color', value: [0.95, 0.85, 0.4] }
   ];
   document.getElementById('code-editor').value = defaultGenCode;
   S.uniforms = defaultGenUniforms.map(u => ({
@@ -7114,7 +7278,7 @@ const LibraryPreview = (() => {
     updateLineNumbers();
     clearTimeout(compileTimer);
     compileTimer = setTimeout(() => {
-      if (codeVisible) UndoRedo.pushCode(); else UndoRedo.push();
+      UndoRedo.push(); // no more codeVisible split — always full snapshot
       if (ShaderLayers.hasLayers()) {
         ShaderLayers.saveActive();
       } else {
@@ -7220,7 +7384,14 @@ const LibraryPreview = (() => {
       ShaderLayers.add({
         name: "New Shader Layer",
         code: DEFAULT_SHADER_TEMPLATE,
-        uniforms: []
+        uniforms: [
+          { name: 'uSpeed',       type: 'float',     value: 0.3,  min: 0.0,  max: 2.0 },
+          { name: 'uScale',       type: 'float',     value: 3.0,  min: 1.0,  max: 10.0 },
+          { name: 'uIridescence', type: 'float',     value: 1.5,  min: 0.0,  max: 3.0 },
+          { name: 'uColorA',      type: 'vec3color', value: [0.1,  0.4,  0.9] },  // синий
+          { name: 'uColorB',      type: 'vec3color', value: [0.9,  0.2,  0.6] },  // розовый
+          { name: 'uColorC',      type: 'vec3color', value: [0.95, 0.85, 0.4] }   // золотой
+        ]
       });
     });
   }
@@ -7268,7 +7439,6 @@ const LibraryPreview = (() => {
     }
 
     btnShowCode.classList.toggle('active', codeVisible);
-    UndoRedo.setMode(codeVisible ? 'code' : 'global');
   }
 
   btnShowCode.addEventListener('click', () => {
@@ -7526,7 +7696,7 @@ const LibraryPreview = (() => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       compile();
-      if (codeVisible) UndoRedo.pushCode(); else UndoRedo.pushImmediate();
+      UndoRedo.pushImmediate();
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
       e.preventDefault();
