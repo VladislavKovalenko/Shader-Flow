@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\n// ── Parameters (Shader Flow) ──────────────────────────────────────────────\nuniform float uCount;         // @range 2 16   — Количество слоев\nuniform float uAngle;         // @range 0 360  — Угол направления сдвига\nuniform float uOffset;        // @range 0 0.05 — Расстояние между слоями\nuniform float uRefraction;    // @range 0 0.08 — Сила преломления стекла\nuniform float uGlassAlpha;    // @range 0.1 1  — Прозрачность стеклянных слоев\nuniform float uSpecHighlight; // @range 0 1    — Блик на гранях стекла (Specular)\nuniform float uSpeed;         // @range 0 3    — Скорость анимации\nuniform float uMode;          // @range 0 7    — 0:Topo 1:Strips 2:Rings 3:Organic 4:Voronoi 5:Spiral 6:Waves 7:Tiles\n\n// ── Helper: 2D Pseudo-Random Hash ─────────────────────────────────────────\nfloat hash21(vec2 p) {\n    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);\n}\n\n// ── Helper: 2D Value Noise ────────────────────────────────────────────────\nfloat valueNoise(vec2 p) {\n    vec2 i = floor(p);\n    vec2 f = fract(p);\n    f = f * f * (3.0 - 2.0 * f);\n    return mix(\n        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),\n        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),\n        f.y\n    );\n}\n\n// ── Helper: Fast Voronoi Noise (Ячейки Кристаллов) ────────────────────────\nfloat voronoi(vec2 p) {\n    vec2 n = floor(p);\n    vec2 f = fract(p);\n    float minDist = 8.0;\n\n    for (int j = -1; j <= 1; j++) {\n        for (int i = -1; i <= 1; i++) {\n            vec2 g = vec2(float(i), float(j));\n            vec2 o = vec2(\n                hash21(n + g), \n                hash21(n + g + vec2(57.0, 113.0))\n            );\n            vec2 r = g + o - f;\n            float d = dot(r, r);\n            if (d < minDist) minDist = d;\n        }\n    }\n    return sqrt(minDist);\n}\n\n// ── Helper: Расчет индекса слоя по координатам ────────────────────────────\nfloat getLayerIndex(vec2 uv, vec2 dir, float count, float mode) {\n    vec2 clampedUv = clamp(uv, 0.0, 1.0);\n    vec4 tex = texture2D(uTexture, clampedUv);\n    float val = 0.0;\n\n    // Центрированные UV с учетом соотношения сторон (для круговых паттернов)\n    vec2 aspectUv = clampedUv - 0.5;\n    aspectUv.x *= iResolution.x / iResolution.y;\n\n    if (mode < 0.5) {\n        // 0: Топографическая нарезка по яркости\n        val = dot(tex.rgb, vec3(0.299, 0.587, 0.114));\n    } else if (mode < 1.5) {\n        // 1: Полосы\n        val = fract(dot(clampedUv, dir * 4.0));\n    } else if (mode < 2.5) {\n        // 2: Концентрические кольца\n        val = fract(length(aspectUv) * 3.0);\n    } else if (mode < 3.5) {\n        // 3: Органический шум\n        val = valueNoise(clampedUv * 5.0);\n    } else if (mode < 4.5) {\n        // 4: Voronoi (кристаллические/геометрические ячейки)\n        val = voronoi(clampedUv * 6.0);\n    } else if (mode < 5.5) {\n        // 5: Архимедова спираль\n        float dist = length(aspectUv);\n        float angle = atan(aspectUv.y, aspectUv.x); // [-PI..PI]\n        val = fract((angle / 6.28318 + 0.5) * 2.0 + dist * 3.0);\n    } else if (mode < 6.5) {\n        // 6: Пересекающиеся синусоидальные волны\n        float waveX = sin(clampedUv.x * 12.0);\n        float waveY = cos(clampedUv.y * 12.0);\n        val = (waveX + waveY) * 0.25 + 0.5;\n    } else {\n        // 7: Пиксельная плитка (случайная высота блоков)\n        vec2 tileUv = floor(clampedUv * 12.0);\n        val = hash21(tileUv);\n    }\n\n    return floor(clamp(val, 0.0, 0.999) * count);\n}\n\n// ── Main Shader Function ──────────────────────────────────────────────────\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    if (uHasTexture == 0) {\n        gl_FragColor = vec4(0.0);\n        return;\n    }\n\n    float rad = radians(uAngle);\n    vec2 dir = vec2(cos(rad), sin(rad));\n\n    // Анимация сдвига\n    float animatedOffset = uOffset * (1.0 + 0.15 * sin(iTime * uSpeed * 2.0));\n\n    // 1. Расчет градиента среза для преломления и бликов (Нормали)\n    vec2 delta = vec2(0.003, 0.003);\n    float layerCenter = getLayerIndex(uv, dir, uCount, uMode);\n    float layerRight  = getLayerIndex(uv + vec2(delta.x, 0.0), dir, uCount, uMode);\n    float layerUp     = getLayerIndex(uv + vec2(0.0, delta.y), dir, uCount, uMode);\n\n    vec2 normal = vec2(layerCenter - layerRight, layerCenter - layerUp);\n    float isEdge = length(normal);\n\n    // 2. Преломление фонового слоя сквозь стекло\n    vec2 refractedUv = uv + normal * uRefraction;\n    vec4 baseTex = texture2D(uTexture, clamp(refractedUv, 0.0, 1.0));\n    vec4 finalColor = baseTex;\n\n    // 3. Рендер наложенных слоев (Back-to-Front)\n    for (int i = 0; i < 16; i++) {\n        if (float(i) >= uCount) break;\n\n        float currentLayer = float(i);\n        vec2 layerOffset = dir * (currentLayer * animatedOffset);\n        vec2 sampleUv = uv - layerOffset;\n\n        if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0) continue;\n\n        float sampledLayer = getLayerIndex(sampleUv, dir, uCount, uMode);\n\n        if (sampledLayer == currentLayer) {\n            vec2 layerGlassUv = sampleUv + normal * (uRefraction * 0.5);\n            vec4 layerTex = texture2D(uTexture, clamp(layerGlassUv, 0.0, 1.0));\n            vec3 col = layerTex.rgb;\n\n            if (isEdge > 0.0) {\n                col += vec3(uSpecHighlight * 0.4 * min(isEdge, 1.0));\n            }\n\n            finalColor.rgb = mix(finalColor.rgb, col, layerTex.a * uGlassAlpha);\n            finalColor.a = max(finalColor.a, layerTex.a * uGlassAlpha);\n        }\n    }\n\n    // Финальный блик на фаске стекла\n    if (isEdge > 0.0) {\n        finalColor.rgb += vec3(uSpecHighlight * 0.5 * min(isEdge, 1.0));\n    }\n\n    gl_FragColor = finalColor;\n}",
+  "uniforms": {
+    "uCount": {
+      "type": "float",
+      "value": 4.165,
+      "min": 2,
+      "max": 16
+    },
+    "uAngle": {
+      "type": "float",
+      "value": 132.836,
+      "min": 0,
+      "max": 360
+    },
+    "uOffset": {
+      "type": "float",
+      "value": 0.004,
+      "min": 0,
+      "max": 0.05
+    },
+    "uRefraction": {
+      "type": "float",
+      "value": 0.047,
+      "min": 0,
+      "max": 0.08
+    },
+    "uGlassAlpha": {
+      "type": "float",
+      "value": 0.865,
+      "min": 0.1,
+      "max": 1
+    },
+    "uSpecHighlight": {
+      "type": "float",
+      "value": 0,
+      "min": 0,
+      "max": 1
+    },
+    "uSpeed": {
+      "type": "float",
+      "value": 0,
+      "min": 0,
+      "max": 3
+    },
+    "uMode": {
+      "type": "float",
+      "value": 0.542,
+      "min": 0,
+      "max": 7
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

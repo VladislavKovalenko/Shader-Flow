@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\n// ═══════════════════════════════════════════════════════════════════════════\n//  MICRO RAIN & MIST SHADER (Effect / Processing Layer)\n// ═══════════════════════════════════════════════════════════════════════════\n\n// ⚡ Кастомный множитель скорости\n#define SPEED_MULTIPLIER 5.0\n\n// ── Parameters (auto-detected by Shader Flow) ─────────────────────────────\n\nuniform vec4  uBaseColor;           // Rain tint color (Color Picker)\nuniform float uDropOpacity;         // Drop streaks opacity\nuniform float uMistDensity;         // Ambient mist intensity\nuniform float uMistDirection;       // @range -1 1 Direction relative to rain (1 = same, -1 = opposite)\n\nuniform float uRainSpeedRate;       // @range 0 15\nuniform float uWindAngle;           // @range 0 360\nuniform float uInvertDirection;     // Direction switch (> 0.5 = bottom-to-top)\n\nuniform float uStreakLength;        // @range 0 10\nuniform float uStreakWidth;         // @range 0 10\nuniform float uRainDensity;         // @range 1 100\nuniform float uMicroParticleScale;  // @range 0 10\nuniform float uGridChaos;           // Grid randomness\n\nuniform float uFadeRandomness;      // Random brightness\nuniform float uFadeScale;           // Wind wave scale\nuniform float uDropDistortion;      // Refraction strength @range 0 2\n\n#define S(a, b, t) smoothstep(a, b, t)\n\n// ── Helper: Pseudo-random hash 2D -> 1D ───────────────────────────────────\nfloat Hash12(vec2 p) {\n    vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n    p3 += dot(p3, p3.yzx + 19.19);\n    return fract((p3.x + p3.y) * p3.z);\n}\n\n// ── Helper: Pseudo-random hash 2D -> 1D ───────────────────────────────────\nfloat Hash21(vec2 p) {\n    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);\n}\n\n// ── Helper: Smooth Noise 2D ───────────────────────────────────────────────\nfloat SmoothNoise(vec2 uv) {\n    vec2 i = floor(uv);\n    vec2 f = fract(uv);\n    vec2 u = f * f * (3.0 - 2.0 * f);\n\n    float a = Hash12(i + vec2(0.0, 0.0));\n    float b = Hash12(i + vec2(1.0, 0.0));\n    float c = Hash12(i + vec2(0.0, 1.0));\n    float d = Hash12(i + vec2(1.0, 1.0));\n\n    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n}\n\n// ── Helper: UV Rotation ───────────────────────────────────────────────────\nvec2 RotateUV(vec2 uv, float angleDeg) {\n    float rad = angleDeg * (3.14159265 / 180.0);\n    float s = sin(rad);\n    float c = cos(rad);\n    return vec2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);\n}\n\n// ── Rain Layer Calculation ────────────────────────────────────────────────\nvec3 MicroRainLayer(vec2 uv, float scale, float time, float speedFactor, float dirMult, float layerSeed, float streakWidth, float streakLength, float chaos, float fadeRandomness, float fadeScale) {\n    float widthFactor  = max(streakWidth, 0.01);\n    float lengthFactor = max(streakLength, 0.01);\n    \n    vec2 st = uv * vec2(scale * 12.0 / widthFactor, scale * 3.0 / lengthFactor);\n    st.y += time * speedFactor * dirMult;\n\n    if (chaos > 0.001) {\n        float noiseShift = SmoothNoise(st * 0.15 + vec2(layerSeed, time * 0.1));\n        st.x += (noiseShift - 0.5) * chaos * 2.0;\n        st.y += (Hash12(floor(st.xx + layerSeed)) - 0.5) * chaos * 1.0;\n    }\n\n    vec2 id = floor(st);\n    vec2 f  = fract(st);\n\n    float cellHash = Hash12(id + layerSeed * 100.0);\n    \n    float xOffset = cellHash * 0.6 + 0.2;\n    vec2 delta = vec2(f.x - xOffset, f.y - 0.5);\n    \n    float xPos = S(0.12, 0.0, abs(delta.x));\n    float yPos = S(1.0, 0.1, f.y) * S(0.0, 0.2, f.y);\n\n    float dropShape = xPos * yPos * step(0.15, cellHash);\n\n    vec2 distortionVector = vec2(delta.x * 2.0, delta.y * dirMult) * dropShape;\n\n    float dropBrightness = mix(1.0, Hash21(id * 0.33), fadeRandomness);\n    float groupWave = SmoothNoise(uv * fadeScale + vec2(time * 0.2, layerSeed));\n    dropBrightness *= mix(0.4, 1.2, groupWave);\n\n    return vec3(distortionVector, dropShape * dropBrightness);\n}\n\n// ── Fine Mist Layer Calculation ───────────────────────────────────────────\nfloat FineRainMist(vec2 uv, float time, float mistDirSign, float mistDensity) {\n    if (mistDensity <= 0.001) return 0.0;\n\n    vec2 mistUV = uv * 30.0;\n    // mistDirSign задает совпадение или противоположность направлению дождя\n    mistUV.y += time * 1.5 * mistDirSign;\n    mistUV.x += sin(mistUV.y * 0.3 + time * 0.5) * 0.3;\n\n    float n = SmoothNoise(mistUV);\n    n += SmoothNoise(mistUV * 2.3 + vec2(time * 0.5, -time * 0.5)) * 0.5;\n    \n    return S(0.1, 0.6, n / 1.5) * mistDensity;\n}\n\n// ── Main Shader ───────────────────────────────────────────────────────────\nvoid main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n\n    float dirMult = (uInvertDirection > 0.5) ? 1.0 : -1.0;\n    \n    float time = iTime * uRainSpeedRate * SPEED_MULTIPLIER;\n\n    vec2 rotatedUV = RotateUV(uv, uWindAngle);\n\n    vec3 layer1 = MicroRainLayer(rotatedUV, uMicroParticleScale * 1.5, time, 1.4, dirMult, 1.1, uStreakWidth, uStreakLength, uGridChaos, uFadeRandomness, uFadeScale);\n    vec3 layer2 = MicroRainLayer(rotatedUV, uMicroParticleScale * 1.0, time, 1.0, dirMult, 2.3, uStreakWidth, uStreakLength, uGridChaos, uFadeRandomness, uFadeScale);\n    vec3 layer3 = MicroRainLayer(rotatedUV, uMicroParticleScale * 0.6, time, 0.7, dirMult, 4.9, uStreakWidth, uStreakLength, uGridChaos, uFadeRandomness, uFadeScale);\n\n    vec2 dropsDistortionOffset = RotateUV(layer1.xy * 0.3 + layer2.xy * 0.5 + layer3.xy * 0.8, -uWindAngle);\n    \n    float rawAcc  = (layer1.z * 0.3 + layer2.z * 0.5 + layer3.z * 0.8) * uRainDensity;\n    float rainAcc = clamp(rawAcc, 0.0, 1.0);\n\n    // Учитываем знак и коэффициент uMistDirection в связке с общим направлением дождя\n    float mistDirSign = dirMult * uMistDirection;\n    float mist = FineRainMist(rotatedUV, time, mistDirSign, uMistDensity);\n\n    // Фоллбэк цвета\n    vec3 rainColor  = length(uBaseColor.rgb) < 0.05 ? vec3(0.85, 0.92, 1.0) : uBaseColor.rgb;\n    float baseAlpha = uBaseColor.a < 0.01 ? 1.0 : uBaseColor.a;\n\n    if (uHasTexture == 1) {\n        vec2 offsetUV = clamp(uv - dropsDistortionOffset * uDropDistortion, 0.001, 0.999);\n        vec4 texColor = texture2D(uTexture, offsetUV);\n        \n        float mistAmount = clamp(mist * baseAlpha, 0.0, 0.85);\n        vec3 colorWithMist = mix(texColor.rgb, rainColor, mistAmount);\n\n        float dropFactor = rainAcc * uDropOpacity * baseAlpha;\n        vec3 finalColor = colorWithMist + (rainColor * dropFactor * 1.5);\n        \n        gl_FragColor = vec4(finalColor, texColor.a);\n    } else {\n        float finalMask = clamp((rainAcc * uDropOpacity + mist) * baseAlpha, 0.0, 1.0);\n        gl_FragColor = vec4(rainColor * finalMask, finalMask);\n    }\n}",
+  "uniforms": {
+    "uDropOpacity": {
+      "type": "float",
+      "value": 0.071,
+      "min": 0,
+      "max": 1
+    },
+    "uMistDensity": {
+      "type": "float",
+      "value": 0,
+      "min": 0,
+      "max": 1
+    },
+    "uMistDirection": {
+      "type": "float",
+      "value": -0.346,
+      "min": -1,
+      "max": 1
+    },
+    "uRainSpeedRate": {
+      "type": "float",
+      "value": 2.32,
+      "min": 0,
+      "max": 15
+    },
+    "uWindAngle": {
+      "type": "float",
+      "value": 169.846,
+      "min": 0,
+      "max": 360
+    },
+    "uInvertDirection": {
+      "type": "float",
+      "value": 0.22,
+      "min": 0,
+      "max": 1
+    },
+    "uStreakLength": {
+      "type": "float",
+      "value": 2.379,
+      "min": 0,
+      "max": 10
+    },
+    "uStreakWidth": {
+      "type": "float",
+      "value": 1.19,
+      "min": 0,
+      "max": 10
+    },
+    "uRainDensity": {
+      "type": "float",
+      "value": 100,
+      "min": 1,
+      "max": 100
+    },
+    "uMicroParticleScale": {
+      "type": "float",
+      "value": 10,
+      "min": 0,
+      "max": 10
+    },
+    "uGridChaos": {
+      "type": "float",
+      "value": 1,
+      "min": 0,
+      "max": 1
+    },
+    "uFadeRandomness": {
+      "type": "float",
+      "value": 1,
+      "min": 0,
+      "max": 1
+    },
+    "uFadeScale": {
+      "type": "float",
+      "value": 10,
+      "min": 0,
+      "max": 10
+    },
+    "uDropDistortion": {
+      "type": "float",
+      "value": 2,
+      "min": 0,
+      "max": 2
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}

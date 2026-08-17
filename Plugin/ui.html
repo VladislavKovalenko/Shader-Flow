@@ -1535,8 +1535,14 @@ const DEFAULT_SHADER_TEMPLATE = `// ══════════════�
 //      uniform vec2  uMyVector;     // appears as two number inputs
 //      uniform vec3  uMyColor;      // appears as a color picker!
 //
-//    To customize slider ranges: edit the parameter in the Parameters panel
-//    after compiling (click the parameter name → set min/max).
+//    To set custom slider ranges, add a @range tag in the same line:
+//
+//      uniform float uAngle;        // @range -45 45
+//      uniform float uSpeed;        // @range 0 20
+//      uniform int   uCount;        // @range 1 50
+//      uniform float uDistortion;   // @range -2 2
+//
+//    Without @range, Shader Flow uses smart auto-ranges based on the name.
 //
 //  ━━ COLOR PICKER TRICK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
@@ -1560,8 +1566,6 @@ const DEFAULT_SHADER_TEMPLATE = `// ══════════════�
 //
 //    vec3  uMyColor, uBaseCol, uAccentColor      → COLOR PICKER (auto!)
 //    vec3  uOffset, uPosition                    → three number inputs
-//
-//  You can ALWAYS adjust ranges manually in the Parameters panel after compile.
 //
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
@@ -3251,13 +3255,11 @@ void main() {
   };
 })();
 
-/* ═══════════════════════════════════════════════════════════════════
-   UNIFORM PARSER
-═══════════════════════════════════════════════════════════════════ */
-
+/* ═══════════════════════════════════════════════════════════════════════════════
+UNIFORM PARSER
+═══════════════════════════════════════════════════════════════════════════════ */
 const UniformParser = (() => {
-  const RE = /^\s*uniform\s+(float|int|bool|vec2|vec3|vec4|sampler2D)\s+(\w+)\s*;/gm;
-
+  const RE = /^\s*uniform\s+(float|int|bool|vec2|vec3|vec4|sampler2D)\s+(\w+)\s*;(.*?)(?:\n|$)/gm;
   const BUILTIN = new Set(['iResolution','iTime','iMouse','uTexture','uHasTexture']);
 
   function parse(glsl) {
@@ -3266,8 +3268,21 @@ const UniformParser = (() => {
     RE.lastIndex = 0;
     while ((m = RE.exec(glsl)) !== null) {
       const type = m[1], name = m[2];
+      const comment = m[3] || '';
       if (BUILTIN.has(name)) continue;
-      found.push({ name, glslType: type });
+
+      let customMin = null, customMax = null;
+      const rangeMatch = comment.match(/@\s*range\s+([-\d.]+)\s+([-\d.]+)/i);
+      if (rangeMatch) {
+        customMin = parseFloat(rangeMatch[1]);
+        customMax = parseFloat(rangeMatch[2]);
+        if (isNaN(customMin) || isNaN(customMax) || customMin >= customMax) {
+          customMin = null;
+          customMax = null;
+        }
+      }
+
+      found.push({ name, glslType: type, customMin, customMax });
     }
     return found;
   }
@@ -3277,9 +3292,18 @@ const UniformParser = (() => {
     for (const p of parsed) {
       const existing = currentUniforms.find(u => u.name === p.name);
       if (existing && typeCompatible(existing.type, p.glslType)) {
+        if (p.customMin !== null && p.customMax !== null) {
+          existing.min = p.customMin;
+          existing.max = p.customMax;
+          if (existing.type === 'int') {
+            existing.value = Math.round(Math.max(p.customMin, Math.min(p.customMax, existing.value)));
+          } else if (existing.type === 'float') {
+            existing.value = Math.max(p.customMin, Math.min(p.customMax, existing.value));
+          }
+        }
         result.push(existing);
       } else {
-        const def = makeDefault(p.name, p.glslType);
+        const def = makeDefault(p.name, p.glslType, p.customMin, p.customMax);
         if (def !== null) result.push(def);
       }
     }
@@ -3291,74 +3315,63 @@ const UniformParser = (() => {
     return uiType === glslType;
   }
 
-  function makeDefault(name, glslType) {
+  function makeDefault(name, glslType, customMin, customMax) {
     switch (glslType) {
       case 'float': {
-        // Умные диапазоны на основе имени параметра
         let min = 0.0, max = 1.0, value = 0.5;
-        const ln = name.toLowerCase();
 
-        // Количество / счётчики
-        if (/count|tile|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
-          min = 1; max = 100; value = 10;
+        if (customMin !== null && customMax !== null) {
+          min = customMin;
+          max = customMax;
+          value = (min + max) / 2;
+        } else {
+          const ln = name.toLowerCase();
+          if (/count|tile|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
+            min = 1; max = 100; value = 10;
+          } else if (/angle|rotat|degree|rot|turn|twist/i.test(ln)) {
+            min = 0; max = 360; value = 0;
+          } else if (/scale|radius|size|width|height|thick|border|length|dist|range/i.test(ln)) {
+            min = 0; max = 10; value = 1;
+          } else if (/speed|freq|rate|velocity|pace|tempo/i.test(ln)) {
+            min = 0; max = 5; value = 1;
+          } else if (/opacity|alpha|strength|intensity|mix|blend|power|factor|weight/i.test(ln)) {
+            min = 0; max = 1; value = 0.5;
+          } else if (/offset|shift|bias|displace|drift|translate|move|pan/i.test(ln)) {
+            min = -1; max = 1; value = 0;
+          } else if (/distort|warp|bend|curve|twist|ripple|wave/i.test(ln)) {
+            min = 0; max = 2; value = 0.5;
+          } else if (/time|delay|duration|period|phase/i.test(ln)) {
+            min = 0; max = 10; value = 1;
+          } else if (/pos|center|origin|anchor|pivot/i.test(ln)) {
+            min = 0; max = 1; value = 0.5;
+          } else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
+            min = 1; max = 8; value = 4;
+          } else if (/soft|blur|smooth|feather|fade|sharp/i.test(ln)) {
+            min = 0; max = 1; value = 0.1;
+          }
         }
-        // Углы и повороты
-        else if (/angle|rotat|degree|rot|turn|twist/i.test(ln)) {
-          min = 0; max = 360; value = 0;
-        }
-        // Размеры и масштабы
-        else if (/scale|radius|size|width|height|thick|border|length|dist|range/i.test(ln)) {
-          min = 0; max = 10; value = 1;
-        }
-        // Скорость и частота
-        else if (/speed|freq|rate|velocity|pace|tempo/i.test(ln)) {
-          min = 0; max = 5; value = 1;
-        }
-        // Прозрачность и интенсивность
-        else if (/opacity|alpha|strength|intensity|mix|blend|power|factor|weight/i.test(ln)) {
-          min = 0; max = 1; value = 0.5;
-        }
-        // Смещения (могут быть отрицательными)
-        else if (/offset|shift|bias|displace|drift|translate|move|pan/i.test(ln)) {
-          min = -1; max = 1; value = 0;
-        }
-        // Искажения
-        else if (/distort|warp|bend|curve|twist|ripple|wave/i.test(ln)) {
-          min = 0; max = 2; value = 0.5;
-        }
-        // Время и задержки
-        else if (/time|delay|duration|period|phase/i.test(ln)) {
-          min = 0; max = 10; value = 1;
-        }
-        // Позиции (0..1 для UV)
-        else if (/pos|center|origin|anchor|pivot/i.test(ln)) {
-          min = 0; max = 1; value = 0.5;
-        }
-        // Детализация и качество
-        else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
-          min = 1; max = 8; value = 4;
-        }
-        // Мягкость и размытие
-        else if (/soft|blur|smooth|feather|fade|sharp/i.test(ln)) {
-          min = 0; max = 1; value = 0.1;
-        }
-
         return { name, type: 'float', value, min, max };
       }
+
       case 'int': {
         let min = 0, max = 10, value = 5;
-        const ln = name.toLowerCase();
-
-        if (/count|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
-          min = 1; max = 100; value = 10;
-        } else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
-          min = 1; max = 8; value = 4;
-        } else if (/sides|points|edges|vertices/i.test(ln)) {
-          min = 3; max = 12; value = 6;
+        if (customMin !== null && customMax !== null) {
+          min = Math.round(customMin);
+          max = Math.round(customMax);
+          value = Math.round((min + max) / 2);
+        } else {
+          const ln = name.toLowerCase();
+          if (/count|num|amount|quantity|segments|steps|iter|cells|rows|cols/i.test(ln)) {
+            min = 1; max = 100; value = 10;
+          } else if (/detail|octave|level|depth|resolution|quality/i.test(ln)) {
+            min = 1; max = 8; value = 4;
+          } else if (/sides|points|edges|vertices/i.test(ln)) {
+            min = 3; max = 12; value = 6;
+          }
         }
-
         return { name, type: 'int', value, min, max };
       }
+
       case 'bool':      return { name, type: 'bool',      value: false };
       case 'vec2':      return { name, type: 'vec2',      value: [0.5, 0.5] };
       case 'vec3': {

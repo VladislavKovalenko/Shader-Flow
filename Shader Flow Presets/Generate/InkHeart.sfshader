@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "format": "sfshader",
+  "name": "MyShader",
+  "shaderSource": "precision mediump float;\n\n// ── Параметры для панели Shader Flow ──────────────────────────────────────\n\nuniform float uSpeed;       // Скорость движения и расплывания\nuniform float uScale;       // Масштаб деталей и волокон\nuniform float uSpread;      // Радиус/заполнение пятна  @range 0.1 2.0\nuniform float uEdgeSharp;   // Четкость краев туши      @range 0.1 5.0\nuniform float uFibers;      // Интенсивность прожилок   @range 0.0 1.0\n\nuniform vec3  uInkColor;    // Цвет чернил\nuniform vec3  uPaperColor;  // Цвет фона/бумаги\n\n// ── МОДУЛЬ 1: Математическое ядро (Собственные хеш и шум) ────────────────\n\nvec2 hash22(vec2 p) {\n  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));\n  p3 += dot(p3, p3.yzx + 33.33);\n  return fract((p3.xx + p3.yz) * p3.zy);\n}\n\n// Симплекс-подобный градиентный шум для плавных завитков\nfloat gradientNoise(vec2 p) {\n  vec2 i = floor(p);\n  vec2 f = fract(p);\n  vec2 u = f * f * (3.0 - 2.0 * f);\n\n  vec2 g00 = hash22(i + vec2(0.0, 0.0)) * 2.0 - 1.0;\n  vec2 g10 = hash22(i + vec2(1.0, 0.0)) * 2.0 - 1.0;\n  vec2 g01 = hash22(i + vec2(0.0, 1.0)) * 2.0 - 1.0;\n  vec2 g11 = hash22(i + vec2(1.0, 1.0)) * 2.0 - 1.0;\n\n  float n00 = dot(g00, f - vec2(0.0, 0.0));\n  float n10 = dot(g10, f - vec2(1.0, 0.0));\n  float n01 = dot(g01, f - vec2(0.0, 1.0));\n  float n11 = dot(g11, f - vec2(1.0, 1.0));\n\n  return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);\n}\n\n// ── МОДУЛЬ 2: Турбулентность жидкой среды (Swirling Flow) ─────────────────\n// Создает эффекты вращения жидкости (вихри), а не просто сдвиг по оси\n\nvec2 getVortexDistortion(vec2 uv, float time) {\n  vec2 p = uv;\n  \n  // Создаем три закручивающихся слоя с разным углом и частотой\n  for (int i = 1; i <= 3; i++) {\n    float fi = float(i);\n    float angle = gradientNoise(p * (fi * 1.5) + vec2(time * 0.1, -time * 0.15)) * 3.14159;\n    \n    // Поворот координат на основе шума\n    mat2 rot = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));\n    p += (rot * vec2(0.25, 0.25)) / fi;\n  }\n  \n  return p;\n}\n\n// ── Main Shader ───────────────────────────────────────────────────────────\nvoid main() {\n  // 1. Приведение UV к правильным пропорциям\n  vec2 uv = gl_FragCoord.xy / iResolution.xy;\n  vec2 aspectUV = uv;\n  aspectUV.x *= iResolution.x / iResolution.y;\n  \n  float t = iTime * uSpeed * 0.3;\n  \n  // 2. Генерация карты искажения жидкости (Модуль 2)\n  vec2 st = aspectUV * uScale;\n  vec2 fluidCoords = getVortexDistortion(st, t);\n\n  // 3. Динамика пятна чернил (Модуль 3: Fluid Spread)\n  vec2 center = vec2(0.5 * (iResolution.x / iResolution.y), 0.5);\n  float distToCenter = length(aspectUV - center);\n  \n  // Вычисляем базовое заполнение: шум среды + радиус от центра\n  float fluidPattern = gradientNoise(fluidCoords * 2.0) * 0.5 + 0.5;\n  float density = fluidPattern - (distToCenter / uSpread);\n\n  // 4. Микроволокна туши (Модуль 4: Ink Fibers)\n  // Используем высокочастотный сжатый шум для имитации волокон бумаги/туши\n  float fiberNoise = gradientNoise(fluidCoords * 12.0 + vec2(density * 4.0));\n  float fibers = pow(abs(fiberNoise), 2.0) * uFibers;\n\n  // 5. Окончательная маска плотности туши с регулировкой резкости края\n  float edgeThreshold = 0.1;\n  float inkAlpha = smoothstep(edgeThreshold - (0.2 / uEdgeSharp), \n                              edgeThreshold + (0.2 / uEdgeSharp), \n                              density + fibers);\n\n  // 6. Градиент внутри пятна (в центре тушь плотнее, на краях — водянистее)\n  float innerOpacity = smoothstep(-0.3, 0.4, density);\n  vec3 currentInkColor = mix(uInkColor * 0.4, uInkColor, innerOpacity);\n\n  // 7. Финальный вывод\n  vec3 finalColor = mix(uPaperColor, currentInkColor, inkAlpha);\n  \n  gl_FragColor = vec4(finalColor, 1.0);\n}",
+  "uniforms": {
+    "uSpeed": {
+      "type": "float",
+      "value": 1.247,
+      "min": 0,
+      "max": 2
+    },
+    "uScale": {
+      "type": "float",
+      "value": 4.43,
+      "min": 1,
+      "max": 10
+    },
+    "uSpread": {
+      "type": "float",
+      "value": 0.177,
+      "min": 0.1,
+      "max": 2
+    },
+    "uEdgeSharp": {
+      "type": "float",
+      "value": 5,
+      "min": 0.1,
+      "max": 5
+    },
+    "uFibers": {
+      "type": "float",
+      "value": 0.45,
+      "min": 0,
+      "max": 1
+    },
+    "uInkColor": {
+      "type": "vec3color",
+      "value": [
+        1,
+        0,
+        0
+      ],
+      "min": null,
+      "max": null
+    },
+    "uPaperColor": {
+      "type": "vec3color",
+      "value": [
+        0,
+        0,
+        0
+      ],
+      "min": null,
+      "max": null
+    }
+  },
+  "masks": [],
+  "settings": {
+    "resolution": "node",
+    "animated": true
+  }
+}
