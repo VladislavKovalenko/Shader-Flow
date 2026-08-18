@@ -44,6 +44,8 @@ A powerful Figma plugin for creating, editing, compositing, and applying GLSL sh
 
 ## Installation
 
+https://youtu.be/F66oGiZPAd4
+
 > The **Figma desktop app** is required to install developer plugins.
 
 1. Right-click on the canvas.
@@ -54,6 +56,8 @@ A powerful Figma plugin for creating, editing, compositing, and applying GLSL sh
 ---
 
 ## 🚀 Quick Start
+
+https://www.youtube.com/watch?v=7kSqcCyCGWI&t=35s
 
 1. Launch **Shader Flow**.
 2. Select a **Frame** on the canvas. Skip this step if you are working with a standalone image.
